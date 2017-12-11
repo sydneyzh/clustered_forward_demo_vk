@@ -1,6 +1,6 @@
 # Clustered Forward Shading Demo in Vulkan
 
-This demo is based on the [slides][slides-link] and [OpenGL code][ogl-code-link] by _Ola Olsson_. The following modifications are made comparing with the original implementation:
+This demo is based on the [slides][slides-link] and [OpenGL code][ogl-code-link] by _Ola Olsson_. The following modifications are made comparing to the original implementation:
 - light list generation using compute shaders
 - simplified view\_z to grid\_z conversion
   `
