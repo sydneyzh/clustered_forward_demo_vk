@@ -4,6 +4,7 @@
 #include "Timer.hpp"
 #include "Physical_device.hpp"
 #include "Device.hpp"
+#include "FPS_log.hpp"
 #include <iostream>
 #include <sstream>
 #define DEBUG_REPORT_VERBOSE false
@@ -136,6 +137,7 @@ public:
             acquire_back_buffer_();
 
             double curr_time=timer.get();
+            fps_log_.update(curr_time - prev_time);
             prev_time=curr_time;
 
             present_back_buffer_(curr_time);
@@ -149,6 +151,7 @@ protected:
     Prog_info_base *p_info_;
     Shell_base *p_shell_;
     bool enable_validation_;
+    FPS_log fps_log_;
 
     std::vector<const char *> req_inst_layers_{};
     std::vector<const char *> req_inst_extensions_{};
