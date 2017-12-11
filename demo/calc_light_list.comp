@@ -1,0 +1,62 @@
+#version 450 core
+
+layout(local_size_x = 32) in;
+layout(set = 0, binding = 0) uniform UBO
+{
+    mat4 view;
+    mat4 normal;
+    mat4 model;
+    mat4 projection_clip;
+
+    vec2 tile_size; // xy
+    uvec2 grid_dim; // xy
+
+    vec3 cam_pos;
+    float cam_far;
+
+    vec2 resolution;
+    uint num_lights;
+} ubo_in;
+layout (set = 0, binding = 1, rgba32f) uniform imageBuffer light_pos_ranges;
+
+layout(set = 1, binding = 0, r8ui) uniform uimageBuffer grid_flags;
+layout(set = 1, binding = 1, r32ui) uniform uimageBuffer light_bounds;
+layout(set = 1, binding = 4, r32ui) uniform uimageBuffer  grid_light_count_offsets;
+layout(set = 1, binding = 5, r32ui) uniform uimageBuffer light_list;
+layout(set = 1, binding = 6, r32ui) uniform uimageBuffer grid_light_counts_compare;
+
+int grid_coord_to_grid_idx(uint i, uint j, uint k)
+{
+    return int(ubo_in.grid_dim.x * ubo_in.grid_dim.y * k + ubo_in.grid_dim.x * j + i);
+}
+
+void main()
+{
+    uint light_idx = gl_GlobalInvocationID.x;
+
+    if (light_idx < ubo_in.num_lights) {
+
+	vec4 pos_range_in = imageLoad(light_pos_ranges, int(light_idx));
+	if (pos_range_in.w == 0.f) return;
+
+	uint i_min = imageLoad(light_bounds, int(light_idx * 6 + 0)).r;
+	uint j_min = imageLoad(light_bounds, int(light_idx * 6 + 1)).r;
+	uint k_min = imageLoad(light_bounds, int(light_idx * 6 + 2)).r;
+	uint i_max = imageLoad(light_bounds, int(light_idx * 6 + 3)).r;
+	uint j_max = imageLoad(light_bounds, int(light_idx * 6 + 4)).r;
+	uint k_max = imageLoad(light_bounds, int(light_idx * 6 + 5)).r;
+
+	for(uint i = i_min; i <= i_max; i++){
+	    for (uint j = j_min; j <= j_max; j++){
+		for (uint k = k_min; k <= k_max; k++){
+		    int grid_idx = grid_coord_to_grid_idx(i,j,k);
+		    if (imageLoad(grid_flags, grid_idx).r == 1) {
+			uint offset = imageLoad(grid_light_count_offsets, grid_idx).r;
+			uint grid_light_idx = imageAtomicAdd(grid_light_counts_compare, grid_idx, 1);
+			imageStore(light_list, int( offset + grid_light_idx), uvec4(light_idx, 0, 0, 0));
+		    }
+		}
+	    }
+	} // grid loop
+    }
+}

@@ -1,0 +1,127 @@
+#version 450 core
+#define CAM_NEAR 0.1f
+#define GRID_DIM_Z 256
+
+layout(local_size_x = 32) in;
+layout(set = 0, binding = 0) uniform UBO
+{
+    mat4 view;
+    mat4 normal;
+    mat4 model;
+    mat4 projection_clip;
+
+    vec2 tile_size; // xy
+    uvec2 grid_dim; // xy
+
+    vec3 cam_pos;
+    float cam_far;
+
+    vec2 resolution;
+    uint num_lights;
+} ubo_in;
+layout (set = 0, binding = 1, rgba32f) uniform imageBuffer light_pos_ranges;
+
+layout (set = 1, binding = 0, r8ui) uniform uimageBuffer grid_flags;
+layout (set = 1, binding = 1, r32ui) uniform uimageBuffer light_bounds;
+layout (set = 1, binding = 2, r32ui) uniform uimageBuffer grid_light_counts;
+
+vec3 get_view_space_pos(vec3 pos_in)
+{
+    return (ubo_in.view * vec4(pos_in, 1.f)).xyz;
+}
+
+vec2 view_pos_to_frag_pos(vec3 view_pos)
+{
+    vec4 clip_pos = ubo_in.projection_clip * vec4(view_pos, 1.f);
+    vec3 ndc = clip_pos.xyz / clip_pos.w;
+    return 0.5 * (1.f + ndc.xy) * ubo_in.resolution;
+}
+
+vec3 view_pos_to_grid_coord(vec2 frag_pos, float view_z)
+{
+    vec3 c;
+    c.xy = frag_pos / ubo_in.tile_size;
+    c.z = min(float(GRID_DIM_Z - 1), max(0.f, float(GRID_DIM_Z) * log((-view_z - CAM_NEAR) / (ubo_in.cam_far - CAM_NEAR) + 1.f)));
+    return c;
+}
+
+int grid_coord_to_grid_idx(uint i, uint j, uint k)
+{
+    return int(ubo_in.grid_dim.x * ubo_in.grid_dim.y * k + ubo_in.grid_dim.x * j + i);
+}
+
+// to mark skipped situations for cal_light_list compute pass
+void mark_skip_light(uint light_idx, vec3 light_pos) {
+    imageStore(light_pos_ranges, int(light_idx), vec4(light_pos, 0.f));
+}
+
+void main()
+{
+    uint light_idx = gl_GlobalInvocationID.x;
+
+    if (light_idx < ubo_in.num_lights) {
+	vec4 pos_range_in = imageLoad(light_pos_ranges, int(light_idx));
+
+	// view space pos
+	vec3 vp = get_view_space_pos(pos_range_in.xyz);
+	vec3 vp_min, vp_max;
+	vp_min.x = vp.x - pos_range_in.w;
+	vp_max.x = vp.x + pos_range_in.w;
+	vp_min.yz = vp.yz + pos_range_in.w;
+	vp_max.yz = vp.yz - pos_range_in.w;
+
+	// restrict view_z
+	if ((vp_max.z >= -CAM_NEAR) || (vp_min.z <= -ubo_in.cam_far)) {
+	    mark_skip_light(light_idx, pos_range_in.xyz);
+	    return;
+	}
+	vp_min.z = min(-CAM_NEAR, vp_min.z);
+	vp_max.z = max(-ubo_in.cam_far, vp_max.z);
+
+	// frag pos
+	vec2 fp_a = view_pos_to_frag_pos(vec3(vp_min.xy, vp_min.z));
+	vec2 fp_b = view_pos_to_frag_pos(vec3(vp_min.xy, vp_max.z));
+	vec2 fp_c = view_pos_to_frag_pos(vec3(vp_max.xy, vp_max.z));
+	vec2 fp_d = view_pos_to_frag_pos(vec3(vp_max.xy, vp_min.z));
+	vec2 fp_min = min(fp_a, fp_b);
+	vec2 fp_max = max(fp_c, fp_d);
+
+	// restrict frag_pos to the frustum
+	bool exit = false;
+	exit = exit || (fp_min.x < 0.f && fp_max.x < 0.f) || (fp_min.y < 0.f && fp_max.y < 0.f);
+	exit = exit || (fp_min.x >= ubo_in.resolution.x && fp_max.x >= ubo_in.resolution.x) || (fp_min.y >= ubo_in.resolution.y && fp_max.y >= ubo_in.resolution.y);
+	exit = exit || fp_min.x > fp_max.x || fp_min.y > fp_max.y;
+	if (exit) {
+	    mark_skip_light(light_idx, pos_range_in.xyz);
+	    return;
+	}
+	fp_min.xy = max(vec2(0.f), fp_min);
+	fp_max.xy = min(ubo_in.resolution - 1.f, fp_max);
+
+	// grid coord
+	vec3 grid_coord_min = view_pos_to_grid_coord(fp_min, vp_min.z);
+	vec3 grid_coord_max = view_pos_to_grid_coord(fp_max, vp_max.z);
+	uvec3 bound_min = uvec3(grid_coord_min);
+	uvec3 bound_max = uvec3(grid_coord_max);
+
+	// image store light bounds
+	imageStore(light_bounds, int(light_idx * 6 + 0), uvec4(bound_min.x, 0, 0, 0));
+	imageStore(light_bounds, int(light_idx * 6 + 1), uvec4(bound_min.y, 0, 0, 0));
+	imageStore(light_bounds, int(light_idx * 6 + 2), uvec4(bound_min.z, 0, 0, 0));
+	imageStore(light_bounds, int(light_idx * 6 + 3), uvec4(bound_max.x, 0, 0, 0));
+	imageStore(light_bounds, int(light_idx * 6 + 4), uvec4(bound_max.y, 0, 0, 0));
+	imageStore(light_bounds, int(light_idx * 6 + 5), uvec4(bound_max.z, 0, 0, 0));
+
+	// atomic add grid_light_counts
+	for (uint i = bound_min.x; i <= bound_max.x; i++) {
+	    for (uint j = bound_min.y; j <= bound_max.y; j++) {
+		for (uint k = bound_min.z; k <= bound_max.z; k++) {
+		    int grid_idx = grid_coord_to_grid_idx(i,j,k);
+		    if (imageLoad(grid_flags, grid_idx).r == 1) {
+			imageAtomicAdd(grid_light_counts, grid_idx, 1);
+		    }
+		}
+	    }
+	} // grid loop
+    } // valid light idx
+}
