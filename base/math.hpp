@@ -11,20 +11,13 @@ float clamp(float num, float min, float max)
     return std::min(max, std::max(min, num));
 }
 
-glm::vec3 transform_point(const glm::mat4& mat, const glm::vec3& pt)
-{
-    glm::vec4 tmp{pt, 1.f};
-    tmp=mat*tmp;
-    return {tmp.x, tmp.y, tmp.z};
-}
-
 class Spherical
 {
 public:
     glm::vec3 el;
     Spherical() : el(glm::vec3(0.f)) {}
     Spherical(float r, float phi, float theta) : el(glm::vec3(r, phi, theta)) {}
-    void set_from_vec(glm::vec3 &v)
+    void set_from_vec(glm::vec3 v)
     {
         el.x=glm::length(v); // r
         if (v.x == 0.f) {
