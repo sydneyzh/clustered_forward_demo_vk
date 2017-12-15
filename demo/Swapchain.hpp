@@ -1,6 +1,6 @@
 #pragma once
 #include <Swapchain.hpp> 
-#include "Render_target.hpp"
+#include <Render_target.hpp>
 
 class Swapchain : public base::Swapchain
 {
@@ -33,8 +33,8 @@ public:
         }
     }
 private:
-    Render_target *p_rt_cluster_forward_{nullptr};
-    Render_target *p_rt_cluster_forward_depth_{nullptr};
+    base::Render_target *p_rt_cluster_forward_{nullptr};
+    base::Render_target *p_rt_cluster_forward_depth_{nullptr};
 
     // no onscreen depth attachment
     void create_depth_attachment_()  override {}
@@ -46,7 +46,7 @@ private:
 
         // cluster forward color attachment
         p_rt_cluster_forward_=
-            new Render_target(p_phy_dev_,
+            new base::Render_target(p_phy_dev_,
                               p_dev_,
                               surface_format_.format,
                               curr_extent_,
@@ -54,7 +54,7 @@ private:
                               {vk::ImageAspectFlagBits::eColor},
                               vk::SampleCountFlagBits::e4);
         p_rt_cluster_forward_depth_=
-            new Render_target(p_phy_dev_,
+            new base::Render_target(p_phy_dev_,
                               p_dev_,
                               depth_format_,
                               curr_extent_,

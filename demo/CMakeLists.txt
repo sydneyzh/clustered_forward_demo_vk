@@ -21,7 +21,6 @@ add_executable(${TARGET_NAME}
     Prog_info.hpp
     Shell.hpp
     Light.hpp
-    Render_target.hpp
     Swapchain.hpp
     Model.hpp
     Program.hpp

@@ -270,3 +270,7 @@ cmake-build-release/
 
 # build-files
 build/
+**/*.vert.h
+**/*.frag.h
+**/*.geom.h
+**/*.comp.h

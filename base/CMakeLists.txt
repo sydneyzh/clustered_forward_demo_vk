@@ -20,6 +20,7 @@ add_library(${LIBNAME} STATIC
     Texture.hpp
     Timer.hpp
     tools.hpp
+    Render_target.hpp
 )
 
 target_link_libraries(${LIBNAME}
