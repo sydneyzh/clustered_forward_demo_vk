@@ -318,7 +318,6 @@ protected:
         } // loop meshes
 
         aabb={min, max};
-        flip_model_();
 
         indices=static_cast<uint32_t>(idata.size());
         std::cout << MSG_PREFIX << "index count: " << indices << std::endl;
@@ -375,6 +374,7 @@ protected:
             cmd_buffers[0]);
     }
 
+    /*
     void flip_model_()
     {
         model_matrix=glm::rotate(model_matrix, 3.1415926f, glm::vec3(1.f, 0.f, 0.f));
@@ -384,6 +384,7 @@ protected:
         aabb={glm::vec3(min.x, -max.y, -max.z), glm::vec3(max.x, -min.y, -min.z)};
         std::cout << MSG_PREFIX << "aabb min: (" << aabb.min.x << ", " << aabb.min.y << ", " << aabb.min.z << ") max: (" << aabb.max.x << ", " << aabb.max.y << ", " << aabb.max.z << ")" << std::endl;
     }
+    */
 };
 } // namespace base
 #undef MSG_PREFIX

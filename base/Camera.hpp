@@ -9,7 +9,7 @@ namespace base
 class Camera
 {
 public:
-    glm::vec3 up{0.f, -1.f, 0.f};
+    glm::vec3 up{0.f, 1.f, 0.f};
     glm::vec3 eye_pos{0.f, 0.f, -4.f};
     glm::vec3 target{0.f, 0.f, 0.f};
     glm::mat4 view{glm::mat4(1.f)};
