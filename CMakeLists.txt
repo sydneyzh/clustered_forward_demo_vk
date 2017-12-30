@@ -69,7 +69,6 @@ include_directories(
     ${Vulkan_INCLUDE_DIR}
     extern/glm
     extern/gli
-    extern/imgui
     extern/assimp/include
     ${CMAKE_CACHEFILE_DIR}/extern/assimp/include 
     base
