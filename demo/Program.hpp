@@ -417,24 +417,22 @@ private:
         {
             vk::CommandBuffer cmd_buffer;
             vk::Fence submit_fence;
-        } offscreen_cmd_buf_blk, compute_cmd_buf_blk, post_compute_cmd_buf_blk;
+        } offscreen_cmd_buf_blk, compute_cmd_buf_blk, onscreen_cmd_buf_blk;
     };
     std::vector<Frame_data> frame_data_vec_;
     vk::DeviceMemory global_uniforms_mem_;
     uint32_t frame_data_count_{0};
     uint32_t frame_data_idx_{0};
 
-    vk::CommandBufferBeginInfo offscreen_cmd_begin_info_;
-    vk::CommandBufferBeginInfo compute_cmd_begin_info_;
-    vk::CommandBufferBeginInfo post_compute_cmd_begin_info_;
+    vk::CommandBufferBeginInfo cmd_begin_info_;
 
-    vk::SubmitInfo pre_compute_cmd_submit_info_;
+    vk::SubmitInfo offscreen_cmd_submit_info_;
     vk::SubmitInfo compute_cmd_submit_info_;
-    vk::SubmitInfo post_compute_cmd_submit_info_;
+    vk::SubmitInfo onscreen_cmd_submit_info_;
 
-    vk::PipelineStageFlags pre_compute_wait_stages_;
+    vk::PipelineStageFlags offscreen_wait_stages_;
     vk::PipelineStageFlags compute_wait_stages_;
-    vk::PipelineStageFlags post_compute_wait_stages_;
+    vk::PipelineStageFlags onscreen_wait_stages_;
 
     void init_frame_data_()
     {
@@ -513,34 +511,34 @@ private:
             uint32_t cidx=0;
             for (auto &data : frame_data_vec_) {
                 data.offscreen_cmd_buf_blk.cmd_buffer=graphics_cmd_buffers[gidx++];
-                data.post_compute_cmd_buf_blk.cmd_buffer=graphics_cmd_buffers[gidx++];
+                data.onscreen_cmd_buf_blk.cmd_buffer=graphics_cmd_buffers[gidx++];
                 data.compute_cmd_buf_blk.cmd_buffer=compute_cmd_buffers[cidx++];
                 data.offscreen_cmd_buf_blk.submit_fence=
                     p_dev_->dev.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
                 data.compute_cmd_buf_blk.submit_fence=
                     p_dev_->dev.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
-                data.post_compute_cmd_buf_blk.submit_fence=
+                data.onscreen_cmd_buf_blk.submit_fence=
                     p_dev_->dev.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
             }
         }
 
         // cmd info
         {
-            offscreen_cmd_begin_info_=
+            cmd_begin_info_=
             {
                 vk::CommandBufferUsageFlagBits::eOneTimeSubmit
             };
+
             // the stage where semaphore wait happens
-            pre_compute_wait_stages_=vk::PipelineStageFlagBits::eFragmentShader;
-            pre_compute_cmd_submit_info_=
+            offscreen_wait_stages_=vk::PipelineStageFlagBits::eFragmentShader;
+            offscreen_cmd_submit_info_=
             {
                 1, nullptr,
-                &pre_compute_wait_stages_,
+                &offscreen_wait_stages_,
                 1, nullptr,
                 1, nullptr
             };
 
-            compute_cmd_begin_info_=offscreen_cmd_begin_info_;
             compute_wait_stages_=vk::PipelineStageFlagBits::eComputeShader;
             compute_cmd_submit_info_=
             {
@@ -550,12 +548,11 @@ private:
                 1, nullptr
             };
 
-            post_compute_cmd_begin_info_=offscreen_cmd_begin_info_;
-            post_compute_wait_stages_=vk::PipelineStageFlagBits::eColorAttachmentOutput;
-            post_compute_cmd_submit_info_=
+            onscreen_wait_stages_=vk::PipelineStageFlagBits::eColorAttachmentOutput;
+            onscreen_cmd_submit_info_=
             {
                 1, nullptr,
-                &post_compute_wait_stages_,
+                &onscreen_wait_stages_,
                 1, nullptr,
                 1, nullptr
             };
@@ -571,7 +568,7 @@ private:
             delete data.p_light_colors;
             p_dev_->dev.destroyFence(data.offscreen_cmd_buf_blk.submit_fence);
             p_dev_->dev.destroyFence(data.compute_cmd_buf_blk.submit_fence);
-            p_dev_->dev.destroyFence(data.post_compute_cmd_buf_blk.submit_fence);
+            p_dev_->dev.destroyFence(data.onscreen_cmd_buf_blk.submit_fence);
         }
     }
 
@@ -1697,7 +1694,7 @@ private:
             update_global_uniforms_(data);
 
             auto &cmd_buf=data.offscreen_cmd_buf_blk.cmd_buffer;
-            cmd_buf.begin(offscreen_cmd_begin_info_);
+            cmd_buf.begin(cmd_begin_info_);
 
             // host write to shader read
             barriers[0]={
@@ -1787,7 +1784,7 @@ private:
             cmd_buf.endRenderPass();
             cmd_buf.end();
 
-            auto &submit_info=post_compute_cmd_submit_info_;
+            auto &submit_info=offscreen_cmd_submit_info_;
             submit_info.pCommandBuffers=&cmd_buf;
             submit_info.pWaitSemaphores=&back.swapchain_image_acquire_semaphore;
             submit_info.pSignalSemaphores=&back.pre_compute_render_semaphore;
@@ -1796,7 +1793,6 @@ private:
         }
 
         // compute
-
         {
             base::assert_success(p_dev_->dev.waitForFences(1,
                                                            &data.compute_cmd_buf_blk.submit_fence,
@@ -1807,7 +1803,7 @@ private:
             update_light_buffers_(elapsed_time, data);
 
             auto &cmd_buf=data.compute_cmd_buf_blk.cmd_buffer;
-            cmd_buf.begin(compute_cmd_begin_info_);
+            cmd_buf.begin(cmd_begin_info_);
 
             barriers[0]={
                 vk::AccessFlagBits::eHostWrite,
@@ -1895,13 +1891,13 @@ private:
         // onscreen
         {
             base::assert_success(p_dev_->dev.waitForFences(1,
-                                                           &data.post_compute_cmd_buf_blk.submit_fence,
+                                                           &data.onscreen_cmd_buf_blk.submit_fence,
                                                            VK_TRUE,
                                                            UINT64_MAX));
-            p_dev_->dev.resetFences(1, &data.post_compute_cmd_buf_blk.submit_fence);
+            p_dev_->dev.resetFences(1, &data.onscreen_cmd_buf_blk.submit_fence);
 
-            auto &cmd_buf=data.post_compute_cmd_buf_blk.cmd_buffer;
-            cmd_buf.begin(post_compute_cmd_begin_info_);
+            auto &cmd_buf=data.onscreen_cmd_buf_blk.cmd_buffer;
+            cmd_buf.begin(cmd_begin_info_);
 
             // render pass
             {
@@ -1913,87 +1909,76 @@ private:
 
                 cmd_buf.beginRenderPass(p_onscreen_rp_->rp_begin, vk::SubpassContents::eInline);
 
-                cmd_buf.bindVertexBuffers(0, 1, &p_model_->p_vert_buffer->buf, &vb_offset);
-                cmd_buf.bindIndexBuffer(p_model_->p_idx_buffer->buf, 0, vk::IndexType::eUint32);
+                // draw scene
+                {
+                    cmd_buf.bindVertexBuffers(0, 1, &p_model_->p_vert_buffer->buf, &vb_offset);
+                    cmd_buf.bindIndexBuffer(p_model_->p_idx_buffer->buf, 0, vk::IndexType::eUint32);
 
-                pipeline_desc_sets_.cluster_forward[2]=data.desc_set;
+                    pipeline_desc_sets_.cluster_forward[2]=data.desc_set;
 
-                // scene parts have been sorted
-                // the opaque are drawn first
-                for (auto &part : p_model_->scene_parts) {
-                    if (part.p_mtl->properties.alpha < 1.f) {
-                        cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                                             pipelines_.cluster_forward_transparent);
+                    // scene parts have been sorted
+                    // the opaque are drawn first
+                    for (auto &part : p_model_->scene_parts) {
+                        if (part.p_mtl->properties.alpha < 1.f) {
+                            cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                                 pipelines_.cluster_forward_transparent);
+                        }
+                        else {
+                            cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                                 pipelines_.cluster_forward_opaque);
+                        }
+                        pipeline_desc_sets_.cluster_forward[1]=part.p_mtl->desc_set_sampler;
+                        cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                                   pipeline_layouts_.cluster_forward,
+                                                   0, static_cast<uint32_t>(pipeline_desc_sets_.cluster_forward.size()),
+                                                   pipeline_desc_sets_.cluster_forward.data(),
+                                                   1, &part.p_mtl->dynamic_offset);
+                        cmd_buf.drawIndexed(part.idx_count, 1, part.idx_base, part.vert_offset, 0);
                     }
-                    else {
-                        cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                                             pipelines_.cluster_forward_opaque);
-                    }
-                    pipeline_desc_sets_.cluster_forward[1]=part.p_mtl->desc_set_sampler;
-                    cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                               pipeline_layouts_.cluster_forward,
-                                               0, static_cast<uint32_t>(pipeline_desc_sets_.cluster_forward.size()),
-                                               pipeline_desc_sets_.cluster_forward.data(),
-                                               1, &part.p_mtl->dynamic_offset);
-                    cmd_buf.drawIndexed(part.idx_count, 1, part.idx_base, part.vert_offset, 0);
                 }
-                // draw light particles
 
-                pipeline_desc_sets_.light_particles[0]=data.desc_set;
-                cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                           pipeline_layouts_.light_particles,
-                                           0, static_cast<uint32_t>(pipeline_desc_sets_.light_particles.size()),
-                                           pipeline_desc_sets_.light_particles.data(),
-                                           0, nullptr);
-                cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                                     pipelines_.light_particles);
-                cmd_buf.bindVertexBuffers(0, 1,
-                                          &data.p_light_pos_ranges->p_buf->buf,
-                                          &vb_offset);
-                cmd_buf.bindVertexBuffers(1, 1,
-                                          &data.p_light_colors->p_buf->buf,
-                                          &vb_offset);
-                cmd_buf.draw(p_info_->num_lights, 1, 0, 0);
+                // draw light particles
+                {
+                    pipeline_desc_sets_.light_particles[0]=data.desc_set;
+                    cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                               pipeline_layouts_.light_particles,
+                                               0, static_cast<uint32_t>(pipeline_desc_sets_.light_particles.size()),
+                                               pipeline_desc_sets_.light_particles.data(),
+                                               0, nullptr);
+                    cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                         pipelines_.light_particles);
+                    cmd_buf.bindVertexBuffers(0, 1,
+                                              &data.p_light_pos_ranges->p_buf->buf,
+                                              &vb_offset);
+                    cmd_buf.bindVertexBuffers(1, 1,
+                                              &data.p_light_colors->p_buf->buf,
+                                              &vb_offset);
+                    cmd_buf.draw(p_info_->num_lights, 1, 0, 0);
+                }
 
                 cmd_buf.endRenderPass();
             }
 
             // clean up buffers
             {
-                // {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                vk::BufferMemoryBarrier barriers[7];
-                barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                                                    vk::AccessFlagBits::eTransferWrite,
-                                                    VK_QUEUE_FAMILY_IGNORED,
-                                                    VK_QUEUE_FAMILY_IGNORED,
-                                                    p_grid_flags_->p_buf->buf,
-                                                    0, VK_WHOLE_SIZE);
+                std::vector<vk::BufferMemoryBarrier> transfer_barriers{4,
+                    vk::BufferMemoryBarrier(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
+                                            vk::AccessFlagBits::eTransferWrite,
+                                            VK_QUEUE_FAMILY_IGNORED,
+                                            VK_QUEUE_FAMILY_IGNORED,
+                                            p_grid_flags_->p_buf->buf,
+                                            0, VK_WHOLE_SIZE)};
+                transfer_barriers[1].buffer=p_grid_light_counts_->p_buf->buf;
+                transfer_barriers[2].buffer=p_grid_light_count_offsets_->p_buf->buf;
+                transfer_barriers[3].buffer=p_light_list_->p_buf->buf;
 
-                barriers[1]=barriers[0];
-                barriers[1].buffer=p_light_bounds_->p_buf->buf;
-
-                barriers[2]=barriers[0];
-                barriers[2].buffer=p_grid_light_counts_->p_buf->buf;
-
-                barriers[3]=barriers[0];
-                barriers[3].buffer=p_grid_light_count_offsets_->p_buf->buf;
-
-                barriers[4]=barriers[0];
-                barriers[4].buffer=p_grid_light_count_total_->p_buf->buf;
-
-                barriers[5]=barriers[0];
-                barriers[5].buffer=p_light_list_->p_buf->buf;
-
-                barriers[6]=barriers[0];
-                barriers[6].buffer=p_grid_light_counts_compare_->p_buf->buf;
-
-                cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eComputeShader,
+                cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,
                                         vk::PipelineStageFlagBits::eTransfer,
                                         vk::DependencyFlagBits::eByRegion,
                                         0, nullptr,
-                                        7, barriers,
+                                        static_cast<uint32_t>(transfer_barriers.size()),
+                                        transfer_barriers.data(),
                                         0, nullptr);
-                // }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 
                 cmd_buf.fillBuffer(p_grid_flags_->p_buf->buf,
                                    0, VK_WHOLE_SIZE,
@@ -2017,44 +2002,29 @@ private:
                                    0, VK_WHOLE_SIZE,
                                    0);
 
-                // {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eTransferWrite,
-                                                    vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                                                    VK_QUEUE_FAMILY_IGNORED,
-                                                    VK_QUEUE_FAMILY_IGNORED,
-                                                    p_grid_flags_->p_buf->buf,
-                                                    0, VK_WHOLE_SIZE);
-
-                barriers[1]=barriers[0];
-                barriers[1].buffer=p_light_bounds_->p_buf->buf;
-
-                barriers[2]=barriers[0];
-                barriers[2].buffer=p_grid_light_counts_->p_buf->buf;
-
-                barriers[3]=barriers[0];
-                barriers[3].buffer=p_grid_light_count_offsets_->p_buf->buf;
-
-                barriers[4]=barriers[0];
-                barriers[4].buffer=p_grid_light_count_total_->p_buf->buf;
-
-                barriers[5]=barriers[0];
-                barriers[5].buffer=p_light_list_->p_buf->buf;
-
-                barriers[6]=barriers[0];
-                barriers[6].buffer=p_grid_light_counts_compare_->p_buf->buf;
-
+                transfer_barriers.clear();
+                transfer_barriers.resize(4,
+                                         vk::BufferMemoryBarrier(vk::AccessFlagBits::eTransferWrite,
+                                                                 vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
+                                                                 VK_QUEUE_FAMILY_IGNORED,
+                                                                 VK_QUEUE_FAMILY_IGNORED,
+                                                                 p_grid_flags_->p_buf->buf,
+                                                                 0, VK_WHOLE_SIZE));
+                transfer_barriers[1].buffer=p_grid_light_counts_->p_buf->buf;
+                transfer_barriers[2].buffer=p_grid_light_count_offsets_->p_buf->buf;
+                transfer_barriers[3].buffer=p_light_list_->p_buf->buf;
                 cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                        vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eComputeShader,
+                                        vk::PipelineStageFlagBits::eFragmentShader,
                                         vk::DependencyFlagBits::eByRegion,
                                         0, nullptr,
-                                        7, barriers,
+                                        static_cast<uint32_t>(transfer_barriers.size()),
+                                        transfer_barriers.data(),
                                         0, nullptr);
-                // }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
             }
 
             cmd_buf.end();
 
-            auto &submit_info=post_compute_cmd_submit_info_;
+            auto &submit_info=onscreen_cmd_submit_info_;
             submit_info.pCommandBuffers=&cmd_buf;
             submit_info.pWaitSemaphores=&back.compute_semaphore;
             submit_info.pSignalSemaphores=&back.onscreen_render_semaphore;
@@ -2062,7 +2032,7 @@ private:
             base::assert_success(p_dev_->graphics_queue.submit(
                 1,
                 &submit_info,
-                data.post_compute_cmd_buf_blk.submit_fence));
+                data.onscreen_cmd_buf_blk.submit_fence));
         }
 
         frame_data_idx_=(frame_data_idx_ + 1) % frame_data_count_;
