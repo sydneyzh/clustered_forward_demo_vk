@@ -20,13 +20,13 @@ public:
     {
         switch (key) {
             // orbit(zoom, phi, theta)
-            case base::KEY_UP:p_camera_->orbit(0.f, -orbit_speed, 0.f);
+            case base::KEY_UP:p_camera_->orbit(0.f, orbit_speed, 0.f);
                 break;
-            case base::KEY_DOWN:p_camera_->orbit(0.f, orbit_speed, 0.f);
+            case base::KEY_DOWN:p_camera_->orbit(0.f, -orbit_speed, 0.f);
                 break;
-            case base::KEY_LEFT:p_camera_->orbit(0.f, 0.f, orbit_speed);
+            case base::KEY_LEFT:p_camera_->orbit(0.f, 0.f, -orbit_speed);
                 break;
-            case base::KEY_RIGHT:p_camera_->orbit(0.f, 0.f, -orbit_speed);
+            case base::KEY_RIGHT:p_camera_->orbit(0.f, 0.f, orbit_speed);
                 break;
             case base::KEY_WHEEL_UP:p_camera_->orbit(-zoom_speed, 0.f, 0.f);
                 break;
