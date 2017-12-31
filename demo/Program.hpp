@@ -111,8 +111,6 @@ private:
     Prog_info * p_info_{nullptr};
     Shell *p_shell_{nullptr};
     base::Camera *p_camera_{nullptr};
-    base::Timer timer_;
-    base::FPS_log frame_time_logger_{60};
     vk::Format depth_format_{vk::Format::eD16Unorm};
 
     // ************************************************************************
@@ -404,6 +402,29 @@ private:
         uint32_t num_lights;
     } global_uniforms_;
 
+    enum Queries
+    {
+        QUERY_DEPTH_PASS=0,
+        QUERY_CLUSTERING=1,
+        QUERY_COMPUTE_FLAGS=2,
+        QUERY_COMPUTE_OFFSETS=3,
+        QUERY_COMPUTE_LIST=4,
+        QUERY_ONSCREEN=5,
+        QUERY_TRANSFER=6,
+        QUERY_HSIZE=7
+    };
+    struct Query_data
+    {
+        uint32_t depth_pass[2];
+        uint32_t clustering[2];
+        uint32_t compute_flags[2];
+        uint32_t compute_offsets[2];
+        uint32_t compute_list[2];
+        uint32_t onscreen[2];
+        uint32_t transfer[2];
+    };
+    uint32_t query_count_;
+
     struct Frame_data
     {
         base::Buffer *p_global_uniforms{nullptr};
@@ -418,6 +439,9 @@ private:
             vk::CommandBuffer cmd_buffer;
             vk::Fence submit_fence;
         } offscreen_cmd_buf_blk, compute_cmd_buf_blk, onscreen_cmd_buf_blk;
+
+        vk::QueryPool query_pool;
+        Query_data query_data;
     };
     std::vector<Frame_data> frame_data_vec_;
     vk::DeviceMemory global_uniforms_mem_;
@@ -557,6 +581,18 @@ private:
                 1, nullptr
             };
         }
+
+        // query pool
+        {
+            query_count_=QUERY_HSIZE * 2;
+            for (auto &data : frame_data_vec_) {
+                data.query_pool=p_dev_->dev.createQueryPool(
+                    vk::QueryPoolCreateInfo({},
+                                            vk::QueryType::eTimestamp,
+                                            query_count_,
+                                            {}));
+            }
+        }
     }
 
     void destroy_frame_data_()
@@ -569,6 +605,7 @@ private:
             p_dev_->dev.destroyFence(data.offscreen_cmd_buf_blk.submit_fence);
             p_dev_->dev.destroyFence(data.compute_cmd_buf_blk.submit_fence);
             p_dev_->dev.destroyFence(data.onscreen_cmd_buf_blk.submit_fence);
+            p_dev_->dev.destroyQueryPool(data.query_pool);
         }
     }
 
@@ -1553,7 +1590,7 @@ private:
         p_dev_->dev.destroyPipeline(pipelines_.cluster_forward_opaque);
         p_dev_->dev.destroyPipeline(pipelines_.cluster_forward_transparent);
     }
-
+   
     // ************************************************************************
     // on frame
     // ************************************************************************
@@ -1653,9 +1690,7 @@ private:
 
     void present_back_buffer_(float elapsed_time) override
     {
-        double prev_time=timer_.get();
-        on_frame_(elapsed_time, frame_time_logger_.get_frame_time());
-        frame_time_logger_.update(timer_.get() - prev_time); // todo log using text overlay 
+        on_frame_(elapsed_time);
 
         auto &back=acquired_back_buf_;
         vk::PresentInfoKHR present_info(1, &back.onscreen_render_semaphore,
@@ -1675,7 +1710,7 @@ private:
         }
     }
 
-    void on_frame_(float elapsed_time, float frame_time)
+    void on_frame_(float elapsed_time)
     {
         const vk::DeviceSize vb_offset{0};
         vk::BufferMemoryBarrier barriers[2];
@@ -1695,6 +1730,8 @@ private:
 
             auto &cmd_buf=data.offscreen_cmd_buf_blk.cmd_buffer;
             cmd_buf.begin(cmd_begin_info_);
+
+            cmd_buf.resetQueryPool(data.query_pool, 0, 4);
 
             // host write to shader read
             barriers[0]={
@@ -1721,11 +1758,12 @@ private:
 
             p_offscreen_rp_->rp_begin.renderArea.extent.width=p_info_->width();
             p_offscreen_rp_->rp_begin.renderArea.extent.height=p_info_->height();
-
             cmd_buf.beginRenderPass(&p_offscreen_rp_->rp_begin, vk::SubpassContents::eInline);
 
             // depth
             {
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_DEPTH_PASS * 2);
+
                 cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                            pipeline_layouts_.depth,
                                            0, 1, &data.desc_set,
@@ -1745,12 +1783,16 @@ private:
                                             1, part.idx_base, part.vert_offset, 0);
                     }
                 }
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eFragmentShader, data.query_pool, QUERY_DEPTH_PASS * 2 + 1);
             }
 
             cmd_buf.nextSubpass(vk::SubpassContents::eInline);
 
             // clustering
             {
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_CLUSTERING * 2);
+
                 pipeline_desc_sets_.clustering[0]=data.desc_set;
                 cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                            pipeline_layouts_.clustering,
@@ -1779,6 +1821,8 @@ private:
                     cmd_buf.drawIndexed(part.idx_count,
                                         1, part.idx_base, part.vert_offset, 0);
                 }
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eFragmentShader, data.query_pool, QUERY_CLUSTERING * 2 + 1);
             }
 
             cmd_buf.endRenderPass();
@@ -1792,6 +1836,14 @@ private:
                                  .submit(1, &submit_info, data.offscreen_cmd_buf_blk.submit_fence));
         }
 
+        base::assert_success(vkGetQueryPoolResults(static_cast<VkDevice>(p_dev_->dev),
+                                                       static_cast<VkQueryPool>(data.query_pool),
+                                                       0, 4,
+                                                       sizeof(uint32_t) * 4,
+                                                       &data.query_data,
+                                                       sizeof(uint32_t),
+                                                       static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
+
         // compute
         {
             base::assert_success(p_dev_->dev.waitForFences(1,
@@ -1804,6 +1856,8 @@ private:
 
             auto &cmd_buf=data.compute_cmd_buf_blk.cmd_buffer;
             cmd_buf.begin(cmd_begin_info_);
+
+            cmd_buf.resetQueryPool(data.query_pool, 4, 6);
 
             barriers[0]={
                 vk::AccessFlagBits::eHostWrite,
@@ -1823,6 +1877,8 @@ private:
             // reads grid_flags, light_pos_ranges
             // writes light_bounds, grid_light_counts
 
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_FLAGS * 2);
+
             cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines_.calc_light_grids);
             pipeline_desc_sets_.calc_light_grids[0]=data.desc_set;
             cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
@@ -1831,6 +1887,8 @@ private:
                                        pipeline_desc_sets_.calc_light_grids.data(),
                                        0, nullptr);
             cmd_buf.dispatch((p_info_->num_lights - 1) / 32 + 1, 1, 1);
+
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, data.query_pool, QUERY_COMPUTE_FLAGS * 2 + 1);
 
             barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
                                                 vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
@@ -1850,6 +1908,8 @@ private:
             // reads grid_flags, grid_light_counts
             // writes grid_light_count_total, grid_light_offsets
 
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_OFFSETS * 2);
+
             cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines_.calc_grid_offsets);
             pipeline_desc_sets_.calc_grid_offsets[0]=data.desc_set;
             cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
@@ -1858,6 +1918,8 @@ private:
                                        pipeline_desc_sets_.calc_grid_offsets.data(),
                                        0, nullptr);
             cmd_buf.dispatch((p_info_->tile_count_x - 1) / 16 + 1, (p_info_->tile_count_y - 1) / 16 + 1, p_info_->TILE_COUNT_Z);
+
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, data.query_pool, QUERY_COMPUTE_OFFSETS * 2 + 1);
 
             barriers[0].buffer=p_grid_light_count_total_->p_buf->buf;
             barriers[1].buffer=p_grid_light_count_offsets_->p_buf->buf;
@@ -1871,6 +1933,8 @@ private:
             // reads grid_flags, light_bounds, grid_light_counts, grid_light_offsets
             // writes grid_light_counts_compare, light_list
 
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_LIST * 2);
+
             cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines_.calc_light_list);
             pipeline_desc_sets_.calc_light_list[0]=data.desc_set;
             cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
@@ -1880,6 +1944,8 @@ private:
                                        0, nullptr);
             cmd_buf.dispatch((p_info_->num_lights - 1) / 32 + 1, 1, 1);
 
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eFragmentShader, data.query_pool, QUERY_COMPUTE_LIST * 2 + 1);
+
             cmd_buf.end();
             compute_cmd_submit_info_.pCommandBuffers=&cmd_buf;
             compute_cmd_submit_info_.pWaitSemaphores=&back.pre_compute_render_semaphore;
@@ -1887,6 +1953,14 @@ private:
             base::assert_success(p_dev_->compute_queue.submit(
                 1, &compute_cmd_submit_info_, data.compute_cmd_buf_blk.submit_fence));
         }
+
+        base::assert_success(vkGetQueryPoolResults(static_cast<VkDevice>(p_dev_->dev),
+                                                       static_cast<VkQueryPool>(data.query_pool),
+                                                       4, 6,
+                                                       sizeof(uint32_t) * 6,
+                                                       &data.query_data.compute_flags[0],
+                                                       sizeof(uint32_t),
+                                                       static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
 
         // onscreen
         {
@@ -1899,6 +1973,8 @@ private:
             auto &cmd_buf=data.onscreen_cmd_buf_blk.cmd_buffer;
             cmd_buf.begin(cmd_begin_info_);
 
+            cmd_buf.resetQueryPool(data.query_pool, 10, 4);
+
             // render pass
             {
                 cmd_buf.setViewport(0, 1, &p_swapchain_->onscreen_viewport);
@@ -1908,6 +1984,8 @@ private:
                 p_onscreen_rp_->rp_begin.renderArea.extent=p_swapchain_->curr_extent();
 
                 cmd_buf.beginRenderPass(p_onscreen_rp_->rp_begin, vk::SubpassContents::eInline);
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_ONSCREEN * 2);
 
                 // draw scene
                 {
@@ -1956,6 +2034,8 @@ private:
                     cmd_buf.draw(p_info_->num_lights, 1, 0, 0);
                 }
 
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eColorAttachmentOutput, data.query_pool, QUERY_ONSCREEN * 2 + 1);
+
                 cmd_buf.endRenderPass();
             }
 
@@ -1980,6 +2060,8 @@ private:
                                         transfer_barriers.data(),
                                         0, nullptr);
 
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_TRANSFER * 2);
+
                 cmd_buf.fillBuffer(p_grid_flags_->p_buf->buf,
                                    0, VK_WHOLE_SIZE,
                                    0);
@@ -2001,6 +2083,8 @@ private:
                 cmd_buf.fillBuffer(p_grid_light_counts_compare_->p_buf->buf,
                                    0, VK_WHOLE_SIZE,
                                    0);
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTransfer, data.query_pool, QUERY_TRANSFER * 2 + 1);
 
                 transfer_barriers.clear();
                 transfer_barriers.resize(4,
@@ -2034,6 +2118,14 @@ private:
                 &submit_info,
                 data.onscreen_cmd_buf_blk.submit_fence));
         }
+
+        base::assert_success(vkGetQueryPoolResults(static_cast<VkDevice>(p_dev_->dev),
+                                                       static_cast<VkQueryPool>(data.query_pool),
+                                                       10, 4,
+                                                       sizeof(uint32_t) * 4,
+                                                       &data.query_data.onscreen[0],
+                                                       sizeof(uint32_t),
+                                                       static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
 
         frame_data_idx_=(frame_data_idx_ + 1) % frame_data_count_;
     }
