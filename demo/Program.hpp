@@ -111,6 +111,8 @@ private:
     Prog_info *p_info_{nullptr};
     Shell *p_shell_{nullptr};
     base::Camera *p_camera_{nullptr};
+    base::Timer timer_;
+    base::FPS_log frame_time_logger_{60};
     vk::Format depth_format_{vk::Format::eD16Unorm};
 
     // ************************************************************************
@@ -1654,7 +1656,9 @@ private:
 
     void present_back_buffer_(float elapsed_time) override
     {
-        on_frame_(elapsed_time);
+        double prev_time=timer_.get();
+        on_frame_(elapsed_time, frame_time_logger_.get_frame_time());
+        frame_time_logger_.update(timer_.get()- prev_time);
 
         auto &back=acquired_back_buf_;
         vk::PresentInfoKHR present_info(1, &back.onscreen_render_semaphore,
@@ -1674,7 +1678,7 @@ private:
         }
     }
 
-    void on_frame_(float elapsed_time)
+    void on_frame_(float elapsed_time, float frame_time)
     {
         auto &back=acquired_back_buf_;
         auto &data=frame_data_vec_[frame_data_idx_];

@@ -1,3 +1,4 @@
+#pragma once
 #include <iostream>
 #include <algorithm>
 #include <iomanip>
@@ -7,7 +8,48 @@ namespace base
 class FPS_log
 {
 public:
+
+    FPS_log(float log_counts=180) :
+        log_counts_(log_counts)
+    {}
+
     void update(float delta_time)
+    {
+        update_(delta_time);
+
+        if (frame_counts_ == log_counts_) {
+            std::cout << std::fixed << std::setprecision(1) <<
+                "frame time min: " << frame_time_min_ <<
+                ", max: " << frame_time_max_ <<
+                ", avg: " << frame_time_avg_ <<
+                ", fps: " << static_cast<int>(1000.f / frame_time_avg_) << std::endl;
+            frame_counts_=0;
+        }
+    }
+
+    void silent_update(float delta_time)
+    {
+
+        update_(delta_time);
+
+        if (frame_counts_ == log_counts_) {
+            frame_counts_=0;
+        }
+    }
+
+    float get_frame_time()
+    {
+        return frame_time_avg_;
+    }
+
+private:
+    uint32_t frame_counts_{0};
+    uint32_t log_counts_;
+    float frame_time_max_{0.f};
+    float frame_time_min_{0.f};
+    float frame_time_avg_{0.f};
+
+    void update_(float delta_time)
     {
         float milsec=delta_time * 1000.f;
 
@@ -22,21 +64,6 @@ public:
             frame_time_avg_=milsec;
         }
         frame_counts_++;
-
-        if (frame_counts_ == log_counts_) {
-            std::cout << std::fixed << std::setprecision(1) <<
-                "frame time min: " << frame_time_min_ <<
-                ", max: " << frame_time_max_ <<
-                ", avg: " << frame_time_avg_ <<
-                ", fps: " << static_cast<int>(1000.f / frame_time_avg_) << std::endl;
-            frame_counts_=0;
-        }
     }
-private:
-    uint32_t frame_counts_{0};
-    uint32_t log_counts_{180};
-    float frame_time_max_{0.f};
-    float frame_time_min_{0.f};
-    float frame_time_avg_{0.f};
 };
 } // namespace base
