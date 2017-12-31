@@ -1658,7 +1658,7 @@ private:
     {
         double prev_time=timer_.get();
         on_frame_(elapsed_time, frame_time_logger_.get_frame_time());
-        frame_time_logger_.update(timer_.get()- prev_time);
+        frame_time_logger_.update(timer_.get()- prev_time); // todo log using text overlay 
 
         auto &back=acquired_back_buf_;
         vk::PresentInfoKHR present_info(1, &back.onscreen_render_semaphore,
@@ -1862,75 +1862,6 @@ private:
             auto &cmd_buf=data.compute_cmd_buf_blk.cmd_buffer;
             cmd_buf.begin(compute_cmd_begin_info_);
 
-            // {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-            // from host write
-            vk::BufferMemoryBarrier barriers[7];
-            barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eHostWrite,
-                                                vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                                                VK_QUEUE_FAMILY_IGNORED,
-                                                VK_QUEUE_FAMILY_IGNORED,
-                                                data.p_global_uniforms->buf,
-                                                0, VK_WHOLE_SIZE);
-
-            barriers[1]=barriers[0];
-            barriers[1].buffer=data.p_light_pos_ranges->p_buf->buf;
-
-            cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eHost,
-                                    vk::PipelineStageFlagBits::eComputeShader,
-                                    vk::DependencyFlagBits::eByRegion,
-                                    0, nullptr,
-                                    2, barriers,
-                                    0, nullptr);
-
-            // from shader write
-            barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eShaderWrite,
-                                                vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                                                p_phy_dev_->graphics_queue_family_idx,
-                                                p_phy_dev_->compute_queue_family_idx,
-                                                p_grid_flags_->p_buf->buf,
-                                                0, VK_WHOLE_SIZE);
-
-            cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,
-                                    vk::PipelineStageFlagBits::eComputeShader,
-                                    vk::DependencyFlagBits::eByRegion,
-                                    0, nullptr,
-                                    1, barriers,
-                                    0, nullptr);
-
-            // from transfer write
-            barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eTransferWrite,
-                                                vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                                                p_phy_dev_->graphics_queue_family_idx,
-                                                p_phy_dev_->compute_queue_family_idx,
-                                                p_grid_flags_->p_buf->buf,
-                                                0, VK_WHOLE_SIZE);
-
-            barriers[1]=barriers[0];
-            barriers[1].buffer=p_light_bounds_->p_buf->buf;
-
-            barriers[2]=barriers[0];
-            barriers[2].buffer=p_grid_light_counts_->p_buf->buf;
-
-            barriers[3]=barriers[0];
-            barriers[3].buffer=p_grid_light_count_offsets_->p_buf->buf;
-
-            barriers[4]=barriers[0];
-            barriers[4].buffer=p_grid_light_count_total_->p_buf->buf;
-
-            barriers[5]=barriers[0];
-            barriers[5].buffer=p_light_list_->p_buf->buf;
-
-            barriers[6]=barriers[0];
-            barriers[6].buffer=p_grid_light_counts_compare_->p_buf->buf;
-
-            cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                    vk::PipelineStageFlagBits::eComputeShader,
-                                    vk::DependencyFlagBits::eByRegion,
-                                    0, nullptr,
-                                    7, barriers,
-                                    0, nullptr);
-            // }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
-
             // --------------------- calc light grids ---------------------
 
             // reads grid_flags, light_pos_ranges
@@ -1946,6 +1877,7 @@ private:
             cmd_buf.dispatch((p_info_->num_lights - 1) / 32 + 1, 1, 1);
 
             // {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
+            vk::BufferMemoryBarrier barriers[2];
             barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
                                                 vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
                                                 VK_QUEUE_FAMILY_IGNORED,
@@ -1996,69 +1928,6 @@ private:
                                        pipeline_desc_sets_.calc_light_list.data(),
                                        0, nullptr);
             cmd_buf.dispatch((p_info_->num_lights - 1) / 32 + 1, 1, 1);
-
-            // {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-            // to host write
-            barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                                                vk::AccessFlagBits::eHostWrite,
-                                                VK_QUEUE_FAMILY_IGNORED,
-                                                VK_QUEUE_FAMILY_IGNORED,
-                                                data.p_global_uniforms->buf,
-                                                0, VK_WHOLE_SIZE);
-            barriers[1]=barriers[0];
-            barriers[1].buffer=data.p_light_pos_ranges->p_buf->buf;
-            cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
-                                    vk::PipelineStageFlagBits::eHost,
-                                    vk::DependencyFlagBits::eByRegion,
-                                    0, nullptr,
-                                    2, barriers,
-                                    0, nullptr);
-            // to shader write
-            barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                                                vk::AccessFlagBits::eShaderWrite,
-                                                p_phy_dev_->compute_queue_family_idx,
-                                                p_phy_dev_->graphics_queue_family_idx,
-                                                p_grid_flags_->p_buf->buf,
-                                                0, VK_WHOLE_SIZE);
-            cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,
-                                    vk::PipelineStageFlagBits::eComputeShader,
-                                    vk::DependencyFlagBits::eByRegion,
-                                    0, nullptr,
-                                    1, barriers,
-                                    0, nullptr);
-            // to transfer write
-            barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                                                vk::AccessFlagBits::eTransferWrite,
-                                                p_phy_dev_->compute_queue_family_idx,
-                                                p_phy_dev_->graphics_queue_family_idx,
-                                                p_grid_flags_->p_buf->buf,
-                                                0, VK_WHOLE_SIZE);
-
-            barriers[1]=barriers[0];
-            barriers[1].buffer=p_light_bounds_->p_buf->buf;
-
-            barriers[2]=barriers[0];
-            barriers[2].buffer=p_grid_light_counts_->p_buf->buf;
-
-            barriers[3]=barriers[0];
-            barriers[3].buffer=p_grid_light_count_offsets_->p_buf->buf;
-
-            barriers[4]=barriers[0];
-            barriers[4].buffer=p_grid_light_count_total_->p_buf->buf;
-
-            barriers[5]=barriers[0];
-            barriers[5].buffer=p_light_list_->p_buf->buf;
-
-            barriers[6]=barriers[0];
-            barriers[6].buffer=p_grid_light_counts_compare_->p_buf->buf;
-
-            cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
-                                    vk::PipelineStageFlagBits::eTransfer,
-                                    vk::DependencyFlagBits::eByRegion,
-                                    0, nullptr,
-                                    7, barriers,
-                                    0, nullptr);
-            // }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 
             cmd_buf.end();
             compute_cmd_submit_info_.pCommandBuffers=&cmd_buf;
