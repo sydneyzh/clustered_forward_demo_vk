@@ -13,6 +13,7 @@
 #include "Model.hpp"
 #include "Swapchain.hpp"
 #include "Shell.hpp"
+#include "Text_overlay.hpp"
 
 #include <queue>
 #include <glm/gtc/type_ptr.hpp>
@@ -57,6 +58,7 @@ public:
         destroy_shaders_();
         destroy_descriptors_();
         destroy_frame_data_();
+        destroy_text_overlay_();
         destroy_lights_();
         destroy_model_();
         destroy_command_pools_();
@@ -72,6 +74,7 @@ public:
         init_command_pools_();
         init_model_();
         init_lights_();
+        init_text_overlay_();
         init_frame_data_();
         init_render_passes_();
         init_offscreen_framebuffer_();
@@ -610,6 +613,28 @@ private:
     }
 
     // ************************************************************************
+    // text overlay 
+    // ************************************************************************
+
+    Text_overlay *p_text_overlay_{nullptr};
+
+    void init_text_overlay_()
+    {
+        std::string file_path=FONT_DIR;
+        file_path.append("/RobotoMonoMedium");
+        p_text_overlay_=new Text_overlay(p_phy_dev_, p_dev_, graphics_cmd_pool_, file_path);
+
+        // debug
+        std::string debug_text="debug text\n12345\nhkj";
+        p_text_overlay_->update_text(debug_text, 0.1, 0.1, 12, 1.f / p_info_->height());
+    }
+
+    void destroy_text_overlay_()
+    {
+        delete p_text_overlay_;
+    }
+
+    // ************************************************************************
     // descriptor sets
     // ************************************************************************
 
@@ -620,9 +645,11 @@ private:
     {
         vk::DescriptorSetLayout frame_data;
         vk::DescriptorSetLayout texel_buffers;
+        vk::DescriptorSetLayout font_tex;
     } desc_set_layouts_;
 
     vk::DescriptorSet desc_set_texel_buffers_;
+    vk::DescriptorSet desc_set_font_tex_;
 
     void init_descriptors_()
     {
@@ -681,6 +708,10 @@ private:
             {
                 0, vk::DescriptorType::eStorageTexelBuffer, 1, frag_comp
             };
+            vk::DescriptorSetLayoutBinding binding_font_tex=
+            {
+                0, vk::DescriptorType::eCombinedImageSampler, 1, frag
+            };
 
             // frame data
 
@@ -721,6 +752,13 @@ private:
                                                   static_cast<uint32_t>(bindings.size()),
                                                   bindings.data()));
             bindings.clear();
+
+            // font tex
+
+            desc_set_layouts_.font_tex=p_dev_->dev.createDescriptorSetLayout(
+                vk::DescriptorSetLayoutCreateInfo({},
+                                                  1,
+                                                  &binding_font_tex));
         }
 
         // desc pool
@@ -728,12 +766,13 @@ private:
             std::vector<vk::DescriptorPoolSize> pool_sizes
             {
                 vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, frame_data_count_ * 1),
-                vk::DescriptorPoolSize(vk::DescriptorType::eStorageTexelBuffer, frame_data_count_ * 2 + 7)
+                vk::DescriptorPoolSize(vk::DescriptorType::eStorageTexelBuffer, frame_data_count_ * 2 + 7),
+                vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, 1)
             };
 
             desc_pool_=p_dev_->dev.createDescriptorPool(
                 vk::DescriptorPoolCreateInfo({},
-                                             frame_data_count_ + 1,
+                                             frame_data_count_ + 2,
                                              static_cast<uint32_t>(pool_sizes.size()),
                                              pool_sizes.data()));
         }
@@ -747,6 +786,7 @@ private:
                 set_layouts.emplace_back(desc_set_layouts_.frame_data);
             }
             set_layouts.emplace_back(desc_set_layouts_.texel_buffers);
+            set_layouts.emplace_back(desc_set_layouts_.font_tex);
 
             std::vector<vk::DescriptorSet> desc_sets=p_dev_->dev.allocateDescriptorSets(
                 vk::DescriptorSetAllocateInfo(
@@ -804,6 +844,15 @@ private:
                                 &p_grid_light_counts_compare_->p_buf->desc_buf_info,
                                 &p_grid_light_counts_compare_->p_buf->view);
 
+            // font tex
+
+            desc_set_font_tex_=desc_sets[idx];
+
+            writes.emplace_back(desc_set_font_tex_,
+                                0, 0, 1, vk::DescriptorType::eCombinedImageSampler,
+                                &p_text_overlay_->p_font->p_tex->desc_image_info,
+                                nullptr, nullptr);
+
             p_dev_->dev.updateDescriptorSets(static_cast<uint32_t>(writes.size()),
                                              writes.data(), 0, nullptr);
             writes.clear();
@@ -816,22 +865,23 @@ private:
         p_dev_->dev.destroyDescriptorPool(desc_pool_);
         p_dev_->dev.destroyDescriptorSetLayout(desc_set_layouts_.frame_data);
         p_dev_->dev.destroyDescriptorSetLayout(desc_set_layouts_.texel_buffers);
+        p_dev_->dev.destroyDescriptorSetLayout(desc_set_layouts_.font_tex);
     }
 
     // ************************************************************************
     // shaders
     // ************************************************************************
 
-    base::Shader *p_simple_vs_;
-    base::Shader *p_clustering_vs_;
-    base::Shader *p_clustering_fs_;
-    base::Shader *p_calc_light_grids_;
-    base::Shader *p_calc_grid_offsets_;
-    base::Shader *p_calc_light_list_;
-    base::Shader *p_cluster_forward_vs_;
-    base::Shader *p_cluster_forward_fs_;
-    base::Shader *p_light_particles_vs_;
-    base::Shader *p_light_particles_fs_;
+    base::Shader *p_simple_vs_{nullptr};
+    base::Shader *p_clustering_vs_{nullptr};
+    base::Shader *p_clustering_fs_{nullptr};
+    base::Shader *p_calc_light_grids_{nullptr};
+    base::Shader *p_calc_grid_offsets_{nullptr};
+    base::Shader *p_calc_light_list_{nullptr};
+    base::Shader *p_cluster_forward_vs_{nullptr};
+    base::Shader *p_cluster_forward_fs_{nullptr};
+    base::Shader *p_light_particles_vs_{nullptr};
+    base::Shader *p_light_particles_fs_{nullptr};
 
     void init_shaders_()
     {
@@ -1207,6 +1257,7 @@ private:
         vk::Pipeline cluster_forward_opaque;
         vk::Pipeline cluster_forward_transparent;
         vk::Pipeline light_particles;
+        vk::Pipeline text_overlay;
     } pipelines_;
 
     struct Pipeline_layouts
@@ -1218,6 +1269,7 @@ private:
         vk::PipelineLayout calc_light_list;
         vk::PipelineLayout cluster_forward;
         vk::PipelineLayout light_particles;
+        vk::PipelineLayout text_overlay;
     } pipeline_layouts_;
 
     struct Pipeline_desc_set_ptrs
@@ -1228,6 +1280,7 @@ private:
         std::vector<vk::DescriptorSet> calc_light_list;
         std::vector<vk::DescriptorSet> cluster_forward;
         std::vector<vk::DescriptorSet> light_particles;
+        std::vector<vk::DescriptorSet> text_overlay;
     } pipeline_desc_sets_;
 
     void init_pipelines_()
@@ -1286,6 +1339,19 @@ private:
 
             pipeline_desc_sets_.light_particles.resize(desc_set_layouts.size());
             pipeline_layouts_.light_particles=p_dev_->dev.createPipelineLayout(
+                vk::PipelineLayoutCreateInfo({},
+                                             static_cast<uint32_t>(desc_set_layouts.size()),
+                                             desc_set_layouts.data(),
+                                             0, nullptr));
+
+            // text overlay
+            desc_set_layouts={
+                desc_set_layouts_.font_tex
+            };
+
+            pipeline_desc_sets_.text_overlay.resize(desc_set_layouts.size());
+            pipeline_desc_sets_.text_overlay[0]=desc_set_font_tex_;
+            pipeline_layouts_.text_overlay=p_dev_->dev.createPipelineLayout(
                 vk::PipelineLayoutCreateInfo({},
                                              static_cast<uint32_t>(desc_set_layouts.size()),
                                              desc_set_layouts.data(),
@@ -1534,21 +1600,41 @@ private:
             shader_stages[0]=p_light_particles_vs_->create_pipeline_stage_info();
             shader_stages[1]=p_light_particles_fs_->create_pipeline_stage_info();
 
-            std::vector<vk::VertexInputBindingDescription> light_particles_binding_descriptions={
+            std::vector<vk::VertexInputBindingDescription> vi_bindings={
                 vk::VertexInputBindingDescription(0, 4 * sizeof(float), vk::VertexInputRate::eVertex),
                 vk::VertexInputBindingDescription(1, 4 * sizeof(char), vk::VertexInputRate::eVertex)
             };
-            std::vector<vk::VertexInputAttributeDescription> light_particles_attrib_descriptions={
+            std::vector<vk::VertexInputAttributeDescription> vi_attribs={
                 vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32A32Sfloat, 0),
                 vk::VertexInputAttributeDescription(1, 1, vk::Format::eR8G8B8A8Unorm, 0)
             };
-            vertex_input_state.vertexBindingDescriptionCount=static_cast<uint32_t>(light_particles_binding_descriptions.size());
-            vertex_input_state.pVertexBindingDescriptions=light_particles_binding_descriptions.data();
-            vertex_input_state.vertexAttributeDescriptionCount=static_cast<uint32_t>(light_particles_attrib_descriptions.size());
-            vertex_input_state.pVertexAttributeDescriptions=light_particles_attrib_descriptions.data();
+            vertex_input_state.vertexBindingDescriptionCount=static_cast<uint32_t>(vi_bindings.size());
+            vertex_input_state.pVertexBindingDescriptions=vi_bindings.data();
+            vertex_input_state.vertexAttributeDescriptionCount=static_cast<uint32_t>(vi_attribs.size());
+            vertex_input_state.pVertexAttributeDescriptions=vi_attribs.data();
 
             pipeline_ci.layout=pipeline_layouts_.light_particles;
             pipelines_.light_particles=p_dev_->dev.createGraphicsPipeline(nullptr, pipeline_ci);
+
+            /* text overlay */
+
+            input_assembly_state.topology=vk::PrimitiveTopology::eTriangleList;
+
+            depth_stencil_state.depthTestEnable=VK_FALSE;
+            depth_stencil_state.depthWriteEnable=VK_FALSE;
+
+            shader_stages[0]=p_text_overlay_->p_vs->create_pipeline_stage_info();
+            shader_stages[1]=p_text_overlay_->p_fs->create_pipeline_stage_info();
+
+            vi_bindings[0]=vk::VertexInputBindingDescription(0, 4 * sizeof(float), vk::VertexInputRate::eVertex);
+            vi_attribs[0]=vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32A32Sfloat, 0);
+            vertex_input_state.vertexBindingDescriptionCount=1;
+            vertex_input_state.pVertexBindingDescriptions=vi_bindings.data();
+            vertex_input_state.vertexAttributeDescriptionCount=1;
+            vertex_input_state.pVertexAttributeDescriptions=vi_attribs.data();
+
+            pipeline_ci.layout=pipeline_layouts_.text_overlay;
+            pipelines_.text_overlay=p_dev_->dev.createGraphicsPipeline(nullptr, pipeline_ci);
 
             /* compute */
 
@@ -1589,7 +1675,7 @@ private:
         p_dev_->dev.destroyPipeline(pipelines_.cluster_forward_opaque);
         p_dev_->dev.destroyPipeline(pipelines_.cluster_forward_transparent);
     }
-   
+
     // ************************************************************************
     // on frame
     // ************************************************************************
@@ -1836,12 +1922,12 @@ private:
         }
 
         base::assert_success(vkGetQueryPoolResults(static_cast<VkDevice>(p_dev_->dev),
-                                                       static_cast<VkQueryPool>(data.query_pool),
-                                                       0, 4,
-                                                       sizeof(uint32_t) * 4,
-                                                       &data.query_data,
-                                                       sizeof(uint32_t),
-                                                       static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
+                                                   static_cast<VkQueryPool>(data.query_pool),
+                                                   0, 4,
+                                                   sizeof(uint32_t) * 4,
+                                                   &data.query_data,
+                                                   sizeof(uint32_t),
+                                                   static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
 
         // compute
         {
@@ -1954,12 +2040,12 @@ private:
         }
 
         base::assert_success(vkGetQueryPoolResults(static_cast<VkDevice>(p_dev_->dev),
-                                                       static_cast<VkQueryPool>(data.query_pool),
-                                                       4, 6,
-                                                       sizeof(uint32_t) * 6,
-                                                       &data.query_data.compute_flags[0],
-                                                       sizeof(uint32_t),
-                                                       static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
+                                                   static_cast<VkQueryPool>(data.query_pool),
+                                                   4, 6,
+                                                   sizeof(uint32_t) * 6,
+                                                   &data.query_data.compute_flags[0],
+                                                   sizeof(uint32_t),
+                                                   static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
 
         // onscreen
         {
@@ -2031,6 +2117,21 @@ private:
                                               &data.p_light_colors->p_buf->buf,
                                               &vb_offset);
                     cmd_buf.draw(p_info_->num_lights, 1, 0, 0);
+                }
+
+                // draw text
+                {
+                    cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                               pipeline_layouts_.text_overlay,
+                                               0, 1, &desc_set_font_tex_,
+                                               0, nullptr);
+                    cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                         pipelines_.text_overlay);
+                    cmd_buf.bindVertexBuffers(0, 1,
+                                              &p_text_overlay_->p_vert_buf->buf,
+                                              &vb_offset);
+                    cmd_buf.bindIndexBuffer(p_text_overlay_->p_idx_buf->buf, 0, vk::IndexType::eUint32);
+                    cmd_buf.drawIndexed(p_text_overlay_->draw_index_count, 1, 0, 0, 0);
                 }
 
                 cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eColorAttachmentOutput, data.query_pool, QUERY_ONSCREEN * 2 + 1);
@@ -2119,12 +2220,12 @@ private:
         }
 
         base::assert_success(vkGetQueryPoolResults(static_cast<VkDevice>(p_dev_->dev),
-                                                       static_cast<VkQueryPool>(data.query_pool),
-                                                       10, 4,
-                                                       sizeof(uint32_t) * 4,
-                                                       &data.query_data.onscreen[0],
-                                                       sizeof(uint32_t),
-                                                       static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
+                                                   static_cast<VkQueryPool>(data.query_pool),
+                                                   10, 4,
+                                                   sizeof(uint32_t) * 4,
+                                                   &data.query_data.onscreen[0],
+                                                   sizeof(uint32_t),
+                                                   static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
 
         frame_data_idx_=(frame_data_idx_ + 1) % frame_data_count_;
     }
