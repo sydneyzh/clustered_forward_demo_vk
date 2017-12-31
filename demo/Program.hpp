@@ -885,7 +885,6 @@ private:
         vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}),
         vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}),
         vk::ClearDepthStencilValue(1.0f, 0),
-        vk::ClearDepthStencilValue(1.0f, 0)
     };
 
     base::Render_pass *p_offscreen_rp_{nullptr};
