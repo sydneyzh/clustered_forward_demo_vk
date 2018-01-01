@@ -13,6 +13,7 @@
 #include "Model.hpp"
 #include "Swapchain.hpp"
 #include "Shell.hpp"
+#include "Text_overlay.hpp"
 
 #include <queue>
 #include <glm/gtc/type_ptr.hpp>
@@ -28,6 +29,14 @@
 #include "cluster_forward.frag.h"
 #include "light_particles.vert.h"
 #include "light_particles.frag.h"
+
+// return in millsec
+inline std::string timestamp_to_str(uint32_t data)
+{
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(4) << (static_cast<float>(data) / 1000000.f);
+    return ss.str();
+}
 
 class Program : public base::Program_base
 {
@@ -57,6 +66,7 @@ public:
         destroy_shaders_();
         destroy_descriptors_();
         destroy_frame_data_();
+        destroy_text_overlay_();
         destroy_lights_();
         destroy_model_();
         destroy_command_pools_();
@@ -72,6 +82,7 @@ public:
         init_command_pools_();
         init_model_();
         init_lights_();
+        init_text_overlay_();
         init_frame_data_();
         init_render_passes_();
         init_offscreen_framebuffer_();
@@ -404,6 +415,29 @@ private:
         uint32_t num_lights;
     } global_uniforms_;
 
+    enum Queries
+    {
+        QUERY_DEPTH_PASS=0,
+        QUERY_CLUSTERING=1,
+        QUERY_COMPUTE_FLAGS=2,
+        QUERY_COMPUTE_OFFSETS=3,
+        QUERY_COMPUTE_LIST=4,
+        QUERY_ONSCREEN=5,
+        QUERY_TRANSFER=6,
+        QUERY_HSIZE=7
+    };
+    struct Query_data
+    {
+        uint32_t depth_pass[2];
+        uint32_t clustering[2];
+        uint32_t compute_flags[2];
+        uint32_t compute_offsets[2];
+        uint32_t compute_list[2];
+        uint32_t onscreen[2];
+        uint32_t transfer[2];
+    };
+    uint32_t query_count_;
+
     struct Frame_data
     {
         base::Buffer *p_global_uniforms{nullptr};
@@ -418,6 +452,9 @@ private:
             vk::CommandBuffer cmd_buffer;
             vk::Fence submit_fence;
         } offscreen_cmd_buf_blk, compute_cmd_buf_blk, onscreen_cmd_buf_blk;
+
+        vk::QueryPool query_pool;
+        Query_data query_data;
     };
     std::vector<Frame_data> frame_data_vec_;
     vk::DeviceMemory global_uniforms_mem_;
@@ -557,6 +594,18 @@ private:
                 1, nullptr
             };
         }
+
+        // query pool
+        {
+            query_count_=QUERY_HSIZE * 2;
+            for (auto &data : frame_data_vec_) {
+                data.query_pool=p_dev_->dev.createQueryPool(
+                    vk::QueryPoolCreateInfo({},
+                                            vk::QueryType::eTimestamp,
+                                            query_count_,
+                                            {}));
+            }
+        }
     }
 
     void destroy_frame_data_()
@@ -569,7 +618,26 @@ private:
             p_dev_->dev.destroyFence(data.offscreen_cmd_buf_blk.submit_fence);
             p_dev_->dev.destroyFence(data.compute_cmd_buf_blk.submit_fence);
             p_dev_->dev.destroyFence(data.onscreen_cmd_buf_blk.submit_fence);
+            p_dev_->dev.destroyQueryPool(data.query_pool);
         }
+    }
+
+    // ************************************************************************
+    // text overlay 
+    // ************************************************************************
+
+    Text_overlay *p_text_overlay_{nullptr};
+
+    void init_text_overlay_()
+    {
+        std::string file_path=FONT_DIR;
+        file_path.append("/RobotoMonoMedium");
+        p_text_overlay_=new Text_overlay(p_phy_dev_, p_dev_, graphics_cmd_pool_, file_path);
+    }
+
+    void destroy_text_overlay_()
+    {
+        delete p_text_overlay_;
     }
 
     // ************************************************************************
@@ -583,9 +651,11 @@ private:
     {
         vk::DescriptorSetLayout frame_data;
         vk::DescriptorSetLayout texel_buffers;
+        vk::DescriptorSetLayout font_tex;
     } desc_set_layouts_;
 
     vk::DescriptorSet desc_set_texel_buffers_;
+    vk::DescriptorSet desc_set_font_tex_;
 
     void init_descriptors_()
     {
@@ -644,6 +714,10 @@ private:
             {
                 0, vk::DescriptorType::eStorageTexelBuffer, 1, frag_comp
             };
+            vk::DescriptorSetLayoutBinding binding_font_tex=
+            {
+                0, vk::DescriptorType::eCombinedImageSampler, 1, frag
+            };
 
             // frame data
 
@@ -684,6 +758,13 @@ private:
                                                   static_cast<uint32_t>(bindings.size()),
                                                   bindings.data()));
             bindings.clear();
+
+            // font tex
+
+            desc_set_layouts_.font_tex=p_dev_->dev.createDescriptorSetLayout(
+                vk::DescriptorSetLayoutCreateInfo({},
+                                                  1,
+                                                  &binding_font_tex));
         }
 
         // desc pool
@@ -691,12 +772,13 @@ private:
             std::vector<vk::DescriptorPoolSize> pool_sizes
             {
                 vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, frame_data_count_ * 1),
-                vk::DescriptorPoolSize(vk::DescriptorType::eStorageTexelBuffer, frame_data_count_ * 2 + 7)
+                vk::DescriptorPoolSize(vk::DescriptorType::eStorageTexelBuffer, frame_data_count_ * 2 + 7),
+                vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, 1)
             };
 
             desc_pool_=p_dev_->dev.createDescriptorPool(
                 vk::DescriptorPoolCreateInfo({},
-                                             frame_data_count_ + 1,
+                                             frame_data_count_ + 2,
                                              static_cast<uint32_t>(pool_sizes.size()),
                                              pool_sizes.data()));
         }
@@ -710,6 +792,7 @@ private:
                 set_layouts.emplace_back(desc_set_layouts_.frame_data);
             }
             set_layouts.emplace_back(desc_set_layouts_.texel_buffers);
+            set_layouts.emplace_back(desc_set_layouts_.font_tex);
 
             std::vector<vk::DescriptorSet> desc_sets=p_dev_->dev.allocateDescriptorSets(
                 vk::DescriptorSetAllocateInfo(
@@ -767,6 +850,15 @@ private:
                                 &p_grid_light_counts_compare_->p_buf->desc_buf_info,
                                 &p_grid_light_counts_compare_->p_buf->view);
 
+            // font tex
+
+            desc_set_font_tex_=desc_sets[idx];
+
+            writes.emplace_back(desc_set_font_tex_,
+                                0, 0, 1, vk::DescriptorType::eCombinedImageSampler,
+                                &p_text_overlay_->p_font->p_tex->desc_image_info,
+                                nullptr, nullptr);
+
             p_dev_->dev.updateDescriptorSets(static_cast<uint32_t>(writes.size()),
                                              writes.data(), 0, nullptr);
             writes.clear();
@@ -779,22 +871,23 @@ private:
         p_dev_->dev.destroyDescriptorPool(desc_pool_);
         p_dev_->dev.destroyDescriptorSetLayout(desc_set_layouts_.frame_data);
         p_dev_->dev.destroyDescriptorSetLayout(desc_set_layouts_.texel_buffers);
+        p_dev_->dev.destroyDescriptorSetLayout(desc_set_layouts_.font_tex);
     }
 
     // ************************************************************************
     // shaders
     // ************************************************************************
 
-    base::Shader *p_simple_vs_;
-    base::Shader *p_clustering_vs_;
-    base::Shader *p_clustering_fs_;
-    base::Shader *p_calc_light_grids_;
-    base::Shader *p_calc_grid_offsets_;
-    base::Shader *p_calc_light_list_;
-    base::Shader *p_cluster_forward_vs_;
-    base::Shader *p_cluster_forward_fs_;
-    base::Shader *p_light_particles_vs_;
-    base::Shader *p_light_particles_fs_;
+    base::Shader *p_simple_vs_{nullptr};
+    base::Shader *p_clustering_vs_{nullptr};
+    base::Shader *p_clustering_fs_{nullptr};
+    base::Shader *p_calc_light_grids_{nullptr};
+    base::Shader *p_calc_grid_offsets_{nullptr};
+    base::Shader *p_calc_light_list_{nullptr};
+    base::Shader *p_cluster_forward_vs_{nullptr};
+    base::Shader *p_cluster_forward_fs_{nullptr};
+    base::Shader *p_light_particles_vs_{nullptr};
+    base::Shader *p_light_particles_fs_{nullptr};
 
     void init_shaders_()
     {
@@ -848,7 +941,6 @@ private:
         vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}),
         vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}),
         vk::ClearDepthStencilValue(1.0f, 0),
-        vk::ClearDepthStencilValue(1.0f, 0)
     };
 
     base::Render_pass *p_offscreen_rp_{nullptr};
@@ -1171,6 +1263,7 @@ private:
         vk::Pipeline cluster_forward_opaque;
         vk::Pipeline cluster_forward_transparent;
         vk::Pipeline light_particles;
+        vk::Pipeline text_overlay;
     } pipelines_;
 
     struct Pipeline_layouts
@@ -1182,6 +1275,7 @@ private:
         vk::PipelineLayout calc_light_list;
         vk::PipelineLayout cluster_forward;
         vk::PipelineLayout light_particles;
+        vk::PipelineLayout text_overlay;
     } pipeline_layouts_;
 
     struct Pipeline_desc_set_ptrs
@@ -1250,6 +1344,17 @@ private:
 
             pipeline_desc_sets_.light_particles.resize(desc_set_layouts.size());
             pipeline_layouts_.light_particles=p_dev_->dev.createPipelineLayout(
+                vk::PipelineLayoutCreateInfo({},
+                                             static_cast<uint32_t>(desc_set_layouts.size()),
+                                             desc_set_layouts.data(),
+                                             0, nullptr));
+
+            // text overlay
+            desc_set_layouts={
+                desc_set_layouts_.font_tex
+            };
+
+            pipeline_layouts_.text_overlay=p_dev_->dev.createPipelineLayout(
                 vk::PipelineLayoutCreateInfo({},
                                              static_cast<uint32_t>(desc_set_layouts.size()),
                                              desc_set_layouts.data(),
@@ -1498,21 +1603,41 @@ private:
             shader_stages[0]=p_light_particles_vs_->create_pipeline_stage_info();
             shader_stages[1]=p_light_particles_fs_->create_pipeline_stage_info();
 
-            std::vector<vk::VertexInputBindingDescription> light_particles_binding_descriptions={
+            std::vector<vk::VertexInputBindingDescription> vi_bindings={
                 vk::VertexInputBindingDescription(0, 4 * sizeof(float), vk::VertexInputRate::eVertex),
                 vk::VertexInputBindingDescription(1, 4 * sizeof(char), vk::VertexInputRate::eVertex)
             };
-            std::vector<vk::VertexInputAttributeDescription> light_particles_attrib_descriptions={
+            std::vector<vk::VertexInputAttributeDescription> vi_attribs={
                 vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32A32Sfloat, 0),
                 vk::VertexInputAttributeDescription(1, 1, vk::Format::eR8G8B8A8Unorm, 0)
             };
-            vertex_input_state.vertexBindingDescriptionCount=static_cast<uint32_t>(light_particles_binding_descriptions.size());
-            vertex_input_state.pVertexBindingDescriptions=light_particles_binding_descriptions.data();
-            vertex_input_state.vertexAttributeDescriptionCount=static_cast<uint32_t>(light_particles_attrib_descriptions.size());
-            vertex_input_state.pVertexAttributeDescriptions=light_particles_attrib_descriptions.data();
+            vertex_input_state.vertexBindingDescriptionCount=static_cast<uint32_t>(vi_bindings.size());
+            vertex_input_state.pVertexBindingDescriptions=vi_bindings.data();
+            vertex_input_state.vertexAttributeDescriptionCount=static_cast<uint32_t>(vi_attribs.size());
+            vertex_input_state.pVertexAttributeDescriptions=vi_attribs.data();
 
             pipeline_ci.layout=pipeline_layouts_.light_particles;
             pipelines_.light_particles=p_dev_->dev.createGraphicsPipeline(nullptr, pipeline_ci);
+
+            /* text overlay */
+
+            input_assembly_state.topology=vk::PrimitiveTopology::eTriangleList;
+
+            depth_stencil_state.depthTestEnable=VK_FALSE;
+            depth_stencil_state.depthWriteEnable=VK_FALSE;
+
+            shader_stages[0]=p_text_overlay_->p_vs->create_pipeline_stage_info();
+            shader_stages[1]=p_text_overlay_->p_fs->create_pipeline_stage_info();
+
+            vi_bindings[0]=vk::VertexInputBindingDescription(0, 4 * sizeof(float), vk::VertexInputRate::eVertex);
+            vi_attribs[0]=vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32A32Sfloat, 0);
+            vertex_input_state.vertexBindingDescriptionCount=1;
+            vertex_input_state.pVertexBindingDescriptions=vi_bindings.data();
+            vertex_input_state.vertexAttributeDescriptionCount=1;
+            vertex_input_state.pVertexAttributeDescriptions=vi_attribs.data();
+
+            pipeline_ci.layout=pipeline_layouts_.text_overlay;
+            pipelines_.text_overlay=p_dev_->dev.createGraphicsPipeline(nullptr, pipeline_ci);
 
             /* compute */
 
@@ -1543,6 +1668,7 @@ private:
         p_dev_->dev.destroyPipelineLayout(pipeline_layouts_.calc_light_list);
         p_dev_->dev.destroyPipelineLayout(pipeline_layouts_.cluster_forward);
         p_dev_->dev.destroyPipelineLayout(pipeline_layouts_.light_particles);
+        p_dev_->dev.destroyPipelineLayout(pipeline_layouts_.text_overlay);
         p_dev_->dev.destroyPipeline(pipelines_.depth);
         p_dev_->dev.destroyPipeline(pipelines_.clustering_opaque);
         p_dev_->dev.destroyPipeline(pipelines_.clustering_transparent);
@@ -1552,6 +1678,7 @@ private:
         p_dev_->dev.destroyPipeline(pipelines_.calc_light_list);
         p_dev_->dev.destroyPipeline(pipelines_.cluster_forward_opaque);
         p_dev_->dev.destroyPipeline(pipelines_.cluster_forward_transparent);
+        p_dev_->dev.destroyPipeline(pipelines_.text_overlay);
     }
 
     // ************************************************************************
@@ -1601,6 +1728,11 @@ private:
 
     void update_light_buffers_(float elapsed_time, Frame_data &data)
     {
+        if (p_info_->gen_lights) {
+            generate_lights();
+            p_info_->gen_lights=false;
+        }
+
         // update host data
         for (auto i=0; i < p_info_->num_lights; i++) {
             lights_[i].update(elapsed_time);
@@ -1651,11 +1783,9 @@ private:
         back_buffers_.pop_front();
     }
 
-    void present_back_buffer_(float elapsed_time) override
+    void present_back_buffer_(float elapsed_time, float delta_time) override
     {
-        double prev_time=timer_.get();
-        on_frame_(elapsed_time, frame_time_logger_.get_frame_time());
-        frame_time_logger_.update(timer_.get() - prev_time); // todo log using text overlay 
+        on_frame_(elapsed_time, delta_time);
 
         auto &back=acquired_back_buf_;
         vk::PresentInfoKHR present_info(1, &back.onscreen_render_semaphore,
@@ -1675,13 +1805,47 @@ private:
         }
     }
 
-    void on_frame_(float elapsed_time, float frame_time)
+    base::FPS_log text_overlay_update_counter_{60};
+    std::string text_overlay_content_;
+
+    void generate_text_(Frame_data &data, std::string &text)
+    {
+        std::stringstream ss;
+        uint32_t depth=data.query_data.depth_pass[1] - data.query_data.depth_pass[0];
+        uint32_t clustering=data.query_data.clustering[1] - data.query_data.clustering[0];
+        uint32_t compute_flags=data.query_data.compute_flags[1] - data.query_data.compute_flags[0];
+        uint32_t compute_offsets=data.query_data.compute_offsets[1] - data.query_data.compute_offsets[0];
+        uint32_t compute_list=data.query_data.compute_list[1] - data.query_data.compute_list[0];
+        uint32_t onscreen=data.query_data.onscreen[1] - data.query_data.onscreen[0];
+        uint32_t transfer=data.query_data.transfer[1] - data.query_data.transfer[0];
+        ss << p_phy_dev_->props.deviceName << "\n" <<
+            "resolution: " << std::to_string(p_info_->width()) << "x" << std::to_string(p_info_->height()) << "\n" <<
+            "light count: " << std::to_string(p_info_->num_lights) << "\n" <<
+            "grid dimension: " << p_info_->tile_count_x << " * " << p_info_->tile_count_y << " * " << p_info_->TILE_COUNT_Z << "\n" << 
+            "CPU: " << text_overlay_update_counter_.get_fps() << " fps\n\n" <<
+            "query data (in ms)\n" <<
+            "------------------\n" <<
+            "subpass depth: " << timestamp_to_str(depth) << "\n" <<
+            "subpass clustering: " << timestamp_to_str(clustering) << "\n" <<
+            "compute grid_flags: " << timestamp_to_str(compute_flags) << "\n" <<
+            "compute light_offsets: " << timestamp_to_str(compute_offsets) << "\n" <<
+            "compute light_list: " << timestamp_to_str(compute_list) << "\n" <<
+            "subpass scene, particles, text (4xMSAA): " << timestamp_to_str(onscreen) << "\n" <<
+            "transfer: " << timestamp_to_str(transfer) << "\n" <<
+            "GPU total: " << timestamp_to_str(depth + clustering + compute_flags + compute_offsets + compute_list + onscreen + transfer);
+
+        text=ss.str();
+    }
+
+    void on_frame_(float elapsed_time, float delta_time)
     {
         const vk::DeviceSize vb_offset{0};
         vk::BufferMemoryBarrier barriers[2];
 
         auto &data=frame_data_vec_[frame_data_idx_];
         auto &back=acquired_back_buf_;
+
+        bool update_text_overlay=text_overlay_update_counter_.silent_update(delta_time);
 
         // offscreen 
         {
@@ -1692,9 +1856,15 @@ private:
             p_dev_->dev.resetFences(1, &data.offscreen_cmd_buf_blk.submit_fence);
 
             update_global_uniforms_(data);
+            if (update_text_overlay) {
+                generate_text_(data, text_overlay_content_);
+                p_text_overlay_->update_text(text_overlay_content_, 0.05, 0.1, 12, 1.f / p_info_->height());
+            }
 
             auto &cmd_buf=data.offscreen_cmd_buf_blk.cmd_buffer;
             cmd_buf.begin(cmd_begin_info_);
+
+            cmd_buf.resetQueryPool(data.query_pool, 0, 4);
 
             // host write to shader read
             barriers[0]={
@@ -1726,6 +1896,8 @@ private:
 
             // depth
             {
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_DEPTH_PASS * 2);
+
                 cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                            pipeline_layouts_.depth,
                                            0, 1, &data.desc_set,
@@ -1745,12 +1917,16 @@ private:
                                             1, part.idx_base, part.vert_offset, 0);
                     }
                 }
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eFragmentShader, data.query_pool, QUERY_DEPTH_PASS * 2 + 1);
             }
 
             cmd_buf.nextSubpass(vk::SubpassContents::eInline);
 
             // clustering
             {
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_CLUSTERING * 2);
+
                 pipeline_desc_sets_.clustering[0]=data.desc_set;
                 cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                            pipeline_layouts_.clustering,
@@ -1779,6 +1955,8 @@ private:
                     cmd_buf.drawIndexed(part.idx_count,
                                         1, part.idx_base, part.vert_offset, 0);
                 }
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eFragmentShader, data.query_pool, QUERY_CLUSTERING * 2 + 1);
             }
 
             cmd_buf.endRenderPass();
@@ -1791,6 +1969,14 @@ private:
             base::assert_success(p_dev_->graphics_queue
                                  .submit(1, &submit_info, data.offscreen_cmd_buf_blk.submit_fence));
         }
+
+        base::assert_success(vkGetQueryPoolResults(static_cast<VkDevice>(p_dev_->dev),
+                                                   static_cast<VkQueryPool>(data.query_pool),
+                                                   0, 4,
+                                                   sizeof(uint32_t) * 4,
+                                                   &data.query_data,
+                                                   sizeof(uint32_t),
+                                                   static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
 
         // compute
         {
@@ -1805,6 +1991,8 @@ private:
             auto &cmd_buf=data.compute_cmd_buf_blk.cmd_buffer;
             cmd_buf.begin(cmd_begin_info_);
 
+            cmd_buf.resetQueryPool(data.query_pool, 4, 6);
+
             barriers[0]={
                 vk::AccessFlagBits::eHostWrite,
                 vk::AccessFlagBits::eShaderRead,
@@ -1813,6 +2001,9 @@ private:
                 data.p_light_pos_ranges->p_buf->buf,
                 0, VK_WHOLE_SIZE
             };
+
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_FLAGS * 2);
+
             cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eHost,
                                     vk::PipelineStageFlagBits::eComputeShader,
                                     vk::DependencyFlagBits::eByRegion,
@@ -1832,6 +2023,8 @@ private:
                                        0, nullptr);
             cmd_buf.dispatch((p_info_->num_lights - 1) / 32 + 1, 1, 1);
 
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, data.query_pool, QUERY_COMPUTE_FLAGS * 2 + 1);
+
             barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
                                                 vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
                                                 VK_QUEUE_FAMILY_IGNORED,
@@ -1850,6 +2043,8 @@ private:
             // reads grid_flags, grid_light_counts
             // writes grid_light_count_total, grid_light_offsets
 
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_OFFSETS * 2);
+
             cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines_.calc_grid_offsets);
             pipeline_desc_sets_.calc_grid_offsets[0]=data.desc_set;
             cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
@@ -1858,6 +2053,8 @@ private:
                                        pipeline_desc_sets_.calc_grid_offsets.data(),
                                        0, nullptr);
             cmd_buf.dispatch((p_info_->tile_count_x - 1) / 16 + 1, (p_info_->tile_count_y - 1) / 16 + 1, p_info_->TILE_COUNT_Z);
+
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, data.query_pool, QUERY_COMPUTE_OFFSETS * 2 + 1);
 
             barriers[0].buffer=p_grid_light_count_total_->p_buf->buf;
             barriers[1].buffer=p_grid_light_count_offsets_->p_buf->buf;
@@ -1871,6 +2068,8 @@ private:
             // reads grid_flags, light_bounds, grid_light_counts, grid_light_offsets
             // writes grid_light_counts_compare, light_list
 
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_LIST * 2);
+
             cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines_.calc_light_list);
             pipeline_desc_sets_.calc_light_list[0]=data.desc_set;
             cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
@@ -1880,6 +2079,8 @@ private:
                                        0, nullptr);
             cmd_buf.dispatch((p_info_->num_lights - 1) / 32 + 1, 1, 1);
 
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eFragmentShader, data.query_pool, QUERY_COMPUTE_LIST * 2 + 1);
+
             cmd_buf.end();
             compute_cmd_submit_info_.pCommandBuffers=&cmd_buf;
             compute_cmd_submit_info_.pWaitSemaphores=&back.pre_compute_render_semaphore;
@@ -1887,6 +2088,14 @@ private:
             base::assert_success(p_dev_->compute_queue.submit(
                 1, &compute_cmd_submit_info_, data.compute_cmd_buf_blk.submit_fence));
         }
+
+        base::assert_success(vkGetQueryPoolResults(static_cast<VkDevice>(p_dev_->dev),
+                                                   static_cast<VkQueryPool>(data.query_pool),
+                                                   4, 6,
+                                                   sizeof(uint32_t) * 6,
+                                                   &data.query_data.compute_flags[0],
+                                                   sizeof(uint32_t),
+                                                   static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
 
         // onscreen
         {
@@ -1899,6 +2108,8 @@ private:
             auto &cmd_buf=data.onscreen_cmd_buf_blk.cmd_buffer;
             cmd_buf.begin(cmd_begin_info_);
 
+            cmd_buf.resetQueryPool(data.query_pool, 10, 4);
+
             // render pass
             {
                 cmd_buf.setViewport(0, 1, &p_swapchain_->onscreen_viewport);
@@ -1908,6 +2119,8 @@ private:
                 p_onscreen_rp_->rp_begin.renderArea.extent=p_swapchain_->curr_extent();
 
                 cmd_buf.beginRenderPass(p_onscreen_rp_->rp_begin, vk::SubpassContents::eInline);
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_ONSCREEN * 2);
 
                 // draw scene
                 {
@@ -1956,6 +2169,23 @@ private:
                     cmd_buf.draw(p_info_->num_lights, 1, 0, 0);
                 }
 
+                // draw text
+                {
+                    cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                               pipeline_layouts_.text_overlay,
+                                               0, 1, &desc_set_font_tex_,
+                                               0, nullptr);
+                    cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                         pipelines_.text_overlay);
+                    cmd_buf.bindVertexBuffers(0, 1,
+                                              &p_text_overlay_->p_vert_buf->buf,
+                                              &vb_offset);
+                    cmd_buf.bindIndexBuffer(p_text_overlay_->p_idx_buf->buf, 0, vk::IndexType::eUint32);
+                    cmd_buf.drawIndexed(p_text_overlay_->draw_index_count, 1, 0, 0, 0);
+                }
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eColorAttachmentOutput, data.query_pool, QUERY_ONSCREEN * 2 + 1);
+
                 cmd_buf.endRenderPass();
             }
 
@@ -1971,6 +2201,8 @@ private:
                 transfer_barriers[1].buffer=p_grid_light_counts_->p_buf->buf;
                 transfer_barriers[2].buffer=p_grid_light_count_offsets_->p_buf->buf;
                 transfer_barriers[3].buffer=p_light_list_->p_buf->buf;
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_TRANSFER * 2);
 
                 cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,
                                         vk::PipelineStageFlagBits::eTransfer,
@@ -2020,6 +2252,8 @@ private:
                                         static_cast<uint32_t>(transfer_barriers.size()),
                                         transfer_barriers.data(),
                                         0, nullptr);
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTransfer, data.query_pool, QUERY_TRANSFER * 2 + 1);
             }
 
             cmd_buf.end();
@@ -2034,6 +2268,14 @@ private:
                 &submit_info,
                 data.onscreen_cmd_buf_blk.submit_fence));
         }
+
+        base::assert_success(vkGetQueryPoolResults(static_cast<VkDevice>(p_dev_->dev),
+                                                   static_cast<VkQueryPool>(data.query_pool),
+                                                   10, 4,
+                                                   sizeof(uint32_t) * 4,
+                                                   &data.query_data.onscreen[0],
+                                                   sizeof(uint32_t),
+                                                   static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
 
         frame_data_idx_=(frame_data_idx_ + 1) % frame_data_count_;
     }

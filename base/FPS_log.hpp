@@ -13,7 +13,7 @@ public:
         log_counts_(log_counts)
     {}
 
-    void update(float delta_time)
+    bool update(float delta_time)
     {
         update_(delta_time);
 
@@ -22,24 +22,36 @@ public:
                 "frame time min: " << frame_time_min_ <<
                 ", max: " << frame_time_max_ <<
                 ", avg: " << frame_time_avg_ <<
-                ", fps: " << static_cast<int>(1000.f / frame_time_avg_) << std::endl;
+                ", fps: " << get_fps() << std::endl;
             frame_counts_=0;
+            return true;
+        }
+        else {
+            return false;
         }
     }
 
-    void silent_update(float delta_time)
+    bool silent_update(float delta_time)
     {
-
         update_(delta_time);
 
         if (frame_counts_ == log_counts_) {
             frame_counts_=0;
+            return true;
+        }
+        else {
+            return false;
         }
     }
 
     float get_frame_time()
     {
         return frame_time_avg_;
+    }
+
+    int get_fps()
+    {
+        return static_cast<int>(1000.f / frame_time_avg_);
     }
 
 private:

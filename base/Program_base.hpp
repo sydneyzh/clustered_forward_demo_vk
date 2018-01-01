@@ -137,10 +137,11 @@ public:
             acquire_back_buffer_();
 
             double curr_time=timer.get();
-            fps_log_.update(curr_time - prev_time);
+            double delta_time=curr_time - prev_time;
+            fps_log_.update(delta_time);
             prev_time=curr_time;
 
-            present_back_buffer_(curr_time);
+            present_back_buffer_(curr_time, delta_time);
         }
 #else
 #error "uninplemented platform"
@@ -272,7 +273,7 @@ protected:
     }
 
     virtual void acquire_back_buffer_()=0;
-    virtual void present_back_buffer_(float elapsed_time)=0;
+    virtual void present_back_buffer_(float elapsed_time, float delta_time)=0;
 };
 } // namespace base
 
