@@ -22,7 +22,7 @@ public:
                 "frame time min: " << frame_time_min_ <<
                 ", max: " << frame_time_max_ <<
                 ", avg: " << frame_time_avg_ <<
-                ", fps: " << static_cast<int>(1000.f / frame_time_avg_) << std::endl;
+                ", fps: " << get_fps() << std::endl;
             frame_counts_=0;
             return true;
         }
@@ -47,6 +47,11 @@ public:
     float get_frame_time()
     {
         return frame_time_avg_;
+    }
+
+    int get_fps()
+    {
+        return static_cast<int>(1000.f / frame_time_avg_);
     }
 
 private:

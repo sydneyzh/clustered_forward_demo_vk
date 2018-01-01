@@ -1726,6 +1726,11 @@ private:
 
     void update_light_buffers_(float elapsed_time, Frame_data &data)
     {
+        if (p_info_->gen_lights) {
+            generate_lights();
+            p_info_->gen_lights=false;
+        }
+
         // update host data
         for (auto i=0; i < p_info_->num_lights; i++) {
             lights_[i].update(elapsed_time);
@@ -1812,7 +1817,10 @@ private:
         uint32_t onscreen=data.query_data.onscreen[1] - data.query_data.onscreen[0];
         uint32_t transfer=data.query_data.transfer[1] - data.query_data.transfer[0];
         ss << p_phy_dev_->props.deviceName << "\n" <<
-            "resolution: " << std::to_string(p_info_->width()) << "x" << std::to_string(p_info_->height()) << "\n\n" <<
+            "resolution: " << std::to_string(p_info_->width()) << "x" << std::to_string(p_info_->height()) << "\n" <<
+            "light count: " << std::to_string(p_info_->num_lights) << "\n" <<
+            "grid dimension: " << p_info_->tile_count_x << " * " << p_info_->tile_count_y << " * " << p_info_->TILE_COUNT_Z << "\n" << 
+            "CPU: " << text_overlay_update_counter_.get_fps() << " fps\n\n" <<
             "query data (in ms)\n" <<
             "------------------\n" <<
             "subpass depth: " << timestamp_to_str(depth) << "\n" <<
@@ -1822,7 +1830,8 @@ private:
             "compute light_list: " << timestamp_to_str(compute_list) << "\n" <<
             "subpass scene, particles, text (4xMSAA): " << timestamp_to_str(onscreen) << "\n" <<
             "transfer: " << timestamp_to_str(transfer) << "\n" <<
-            "total: " << timestamp_to_str(depth + clustering + compute_flags + compute_offsets + compute_list + onscreen + transfer);
+            "GPU total: " << timestamp_to_str(depth + clustering + compute_flags + compute_offsets + compute_list + onscreen + transfer);
+
         text=ss.str();
     }
 
@@ -1834,7 +1843,7 @@ private:
         auto &data=frame_data_vec_[frame_data_idx_];
         auto &back=acquired_back_buf_;
 
-        bool update_text=text_overlay_update_counter_.silent_update(delta_time);
+        bool update_text_overlay=text_overlay_update_counter_.silent_update(delta_time);
 
         // offscreen 
         {
@@ -1845,9 +1854,9 @@ private:
             p_dev_->dev.resetFences(1, &data.offscreen_cmd_buf_blk.submit_fence);
 
             update_global_uniforms_(data);
-            if (update_text) {
+            if (update_text_overlay) {
                 generate_text_(data, text_overlay_content_);
-                p_text_overlay_->update_text(text_overlay_content_, 0.1, 0.1, 12, 1.f / p_info_->height());
+                p_text_overlay_->update_text(text_overlay_content_, 0.05, 0.1, 12, 1.f / p_info_->height());
             }
 
             auto &cmd_buf=data.offscreen_cmd_buf_blk.cmd_buffer;
@@ -1989,6 +1998,9 @@ private:
                 data.p_light_pos_ranges->p_buf->buf,
                 0, VK_WHOLE_SIZE
             };
+
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_FLAGS * 2);
+
             cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eHost,
                                     vk::PipelineStageFlagBits::eComputeShader,
                                     vk::DependencyFlagBits::eByRegion,
@@ -1998,8 +2010,6 @@ private:
 
             // reads grid_flags, light_pos_ranges
             // writes light_bounds, grid_light_counts
-
-            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_FLAGS * 2);
 
             cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines_.calc_light_grids);
             pipeline_desc_sets_.calc_light_grids[0]=data.desc_set;
@@ -2189,6 +2199,8 @@ private:
                 transfer_barriers[2].buffer=p_grid_light_count_offsets_->p_buf->buf;
                 transfer_barriers[3].buffer=p_light_list_->p_buf->buf;
 
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_TRANSFER * 2);
+
                 cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,
                                         vk::PipelineStageFlagBits::eTransfer,
                                         vk::DependencyFlagBits::eByRegion,
@@ -2196,8 +2208,6 @@ private:
                                         static_cast<uint32_t>(transfer_barriers.size()),
                                         transfer_barriers.data(),
                                         0, nullptr);
-
-                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_TRANSFER * 2);
 
                 cmd_buf.fillBuffer(p_grid_flags_->p_buf->buf,
                                    0, VK_WHOLE_SIZE,
@@ -2221,8 +2231,6 @@ private:
                                    0, VK_WHOLE_SIZE,
                                    0);
 
-                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTransfer, data.query_pool, QUERY_TRANSFER * 2 + 1);
-
                 transfer_barriers.clear();
                 transfer_barriers.resize(4,
                                          vk::BufferMemoryBarrier(vk::AccessFlagBits::eTransferWrite,
@@ -2241,6 +2249,8 @@ private:
                                         static_cast<uint32_t>(transfer_barriers.size()),
                                         transfer_barriers.data(),
                                         0, nullptr);
+
+                cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTransfer, data.query_pool, QUERY_TRANSFER * 2 + 1);
             }
 
             cmd_buf.end();

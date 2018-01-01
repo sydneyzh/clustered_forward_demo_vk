@@ -46,6 +46,11 @@ public:
             case base::KEY_S:p_camera_->forward(pan_speed); // move backward
                 break;
 
+            case base::KEY_NUM_0:p_info_->increase_num_lights();
+                break;
+            case base::KEY_NUM_9:p_info_->decrease_num_lights();
+                break;
+
             default:base::Shell_base::on_key(key);
                 break;
         }

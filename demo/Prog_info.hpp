@@ -9,8 +9,10 @@ public:
     uint32_t MAX_WIDTH{1920};
     uint32_t MAX_HEIGHT{1080};
 
-    uint32_t MAX_NUM_LIGHTS{2048};
+    uint32_t MIN_NUM_LIGHTS{1024};
+    uint32_t MAX_NUM_LIGHTS{600000};
     uint32_t num_lights{0};
+    bool gen_lights{false};
 
     uint32_t TILE_WIDTH{64};
     uint32_t TILE_HEIGHT{64};
@@ -22,7 +24,7 @@ public:
     Prog_info()
     {
         update_tile_counts();
-        num_lights=MAX_NUM_LIGHTS;
+        num_lights=2048;
     }
 
     void update_tile_counts()
@@ -52,6 +54,18 @@ public:
         height_=std::min(MAX_HEIGHT, height);
         update_tile_counts();
         resize_flag=true;
+    }
+
+    void increase_num_lights()
+    {
+        num_lights=std::min(MAX_NUM_LIGHTS, num_lights * 2);
+        gen_lights=true;
+    }
+
+    void decrease_num_lights()
+    {
+        num_lights=std::max(MIN_NUM_LIGHTS, num_lights / 2);
+        gen_lights=true;
     }
 
 private:
