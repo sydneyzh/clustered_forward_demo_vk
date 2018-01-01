@@ -30,6 +30,14 @@
 #include "light_particles.vert.h"
 #include "light_particles.frag.h"
 
+// return in millsec
+inline std::string timestamp_to_str(uint32_t data)
+{
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(4) << (static_cast<float>(data) / 1000000.f);
+    return ss.str();
+}
+
 class Program : public base::Program_base
 {
 public:
@@ -623,10 +631,6 @@ private:
         std::string file_path=FONT_DIR;
         file_path.append("/RobotoMonoMedium");
         p_text_overlay_=new Text_overlay(p_phy_dev_, p_dev_, graphics_cmd_pool_, file_path);
-
-        // debug
-        std::string debug_text="debug text\n12345\nhkj";
-        p_text_overlay_->update_text(debug_text, 0.1, 0.1, 12, 1.f / p_info_->height());
     }
 
     void destroy_text_overlay_()
@@ -1280,7 +1284,6 @@ private:
         std::vector<vk::DescriptorSet> calc_light_list;
         std::vector<vk::DescriptorSet> cluster_forward;
         std::vector<vk::DescriptorSet> light_particles;
-        std::vector<vk::DescriptorSet> text_overlay;
     } pipeline_desc_sets_;
 
     void init_pipelines_()
@@ -1349,8 +1352,6 @@ private:
                 desc_set_layouts_.font_tex
             };
 
-            pipeline_desc_sets_.text_overlay.resize(desc_set_layouts.size());
-            pipeline_desc_sets_.text_overlay[0]=desc_set_font_tex_;
             pipeline_layouts_.text_overlay=p_dev_->dev.createPipelineLayout(
                 vk::PipelineLayoutCreateInfo({},
                                              static_cast<uint32_t>(desc_set_layouts.size()),
@@ -1665,6 +1666,7 @@ private:
         p_dev_->dev.destroyPipelineLayout(pipeline_layouts_.calc_light_list);
         p_dev_->dev.destroyPipelineLayout(pipeline_layouts_.cluster_forward);
         p_dev_->dev.destroyPipelineLayout(pipeline_layouts_.light_particles);
+        p_dev_->dev.destroyPipelineLayout(pipeline_layouts_.text_overlay);
         p_dev_->dev.destroyPipeline(pipelines_.depth);
         p_dev_->dev.destroyPipeline(pipelines_.clustering_opaque);
         p_dev_->dev.destroyPipeline(pipelines_.clustering_transparent);
@@ -1674,6 +1676,7 @@ private:
         p_dev_->dev.destroyPipeline(pipelines_.calc_light_list);
         p_dev_->dev.destroyPipeline(pipelines_.cluster_forward_opaque);
         p_dev_->dev.destroyPipeline(pipelines_.cluster_forward_transparent);
+        p_dev_->dev.destroyPipeline(pipelines_.text_overlay);
     }
 
     // ************************************************************************
@@ -1773,9 +1776,9 @@ private:
         back_buffers_.pop_front();
     }
 
-    void present_back_buffer_(float elapsed_time) override
+    void present_back_buffer_(float elapsed_time, float delta_time) override
     {
-        on_frame_(elapsed_time);
+        on_frame_(elapsed_time, delta_time);
 
         auto &back=acquired_back_buf_;
         vk::PresentInfoKHR present_info(1, &back.onscreen_render_semaphore,
@@ -1795,13 +1798,43 @@ private:
         }
     }
 
-    void on_frame_(float elapsed_time)
+    base::FPS_log text_overlay_update_counter_{60};
+    std::string text_overlay_content_;
+
+    void generate_text_(Frame_data &data, std::string &text)
+    {
+        std::stringstream ss;
+        uint32_t depth=data.query_data.depth_pass[1] - data.query_data.depth_pass[0];
+        uint32_t clustering=data.query_data.clustering[1] - data.query_data.clustering[0];
+        uint32_t compute_flags=data.query_data.compute_flags[1] - data.query_data.compute_flags[0];
+        uint32_t compute_offsets=data.query_data.compute_offsets[1] - data.query_data.compute_offsets[0];
+        uint32_t compute_list=data.query_data.compute_list[1] - data.query_data.compute_list[0];
+        uint32_t onscreen=data.query_data.onscreen[1] - data.query_data.onscreen[0];
+        uint32_t transfer=data.query_data.transfer[1] - data.query_data.transfer[0];
+        ss << p_phy_dev_->props.deviceName << "\n" <<
+            "resolution: " << std::to_string(p_info_->width()) << "x" << std::to_string(p_info_->height()) << "\n\n" <<
+            "query data (in ms)\n" <<
+            "------------------\n" <<
+            "subpass depth: " << timestamp_to_str(depth) << "\n" <<
+            "subpass clustering: " << timestamp_to_str(clustering) << "\n" <<
+            "compute grid_flags: " << timestamp_to_str(compute_flags) << "\n" <<
+            "compute light_offsets: " << timestamp_to_str(compute_offsets) << "\n" <<
+            "compute light_list: " << timestamp_to_str(compute_list) << "\n" <<
+            "subpass scene, particles, text (4xMSAA): " << timestamp_to_str(onscreen) << "\n" <<
+            "transfer: " << timestamp_to_str(transfer) << "\n" <<
+            "total: " << timestamp_to_str(depth + clustering + compute_flags + compute_offsets + compute_list + onscreen + transfer);
+        text=ss.str();
+    }
+
+    void on_frame_(float elapsed_time, float delta_time)
     {
         const vk::DeviceSize vb_offset{0};
         vk::BufferMemoryBarrier barriers[2];
 
         auto &data=frame_data_vec_[frame_data_idx_];
         auto &back=acquired_back_buf_;
+
+        bool update_text=text_overlay_update_counter_.silent_update(delta_time);
 
         // offscreen 
         {
@@ -1812,6 +1845,10 @@ private:
             p_dev_->dev.resetFences(1, &data.offscreen_cmd_buf_blk.submit_fence);
 
             update_global_uniforms_(data);
+            if (update_text) {
+                generate_text_(data, text_overlay_content_);
+                p_text_overlay_->update_text(text_overlay_content_, 0.1, 0.1, 12, 1.f / p_info_->height());
+            }
 
             auto &cmd_buf=data.offscreen_cmd_buf_blk.cmd_buffer;
             cmd_buf.begin(cmd_begin_info_);

@@ -9,7 +9,7 @@ int main()
         Prog_info prog_info{};
         base::Camera camera{};
         Shell shell{&prog_info, &camera};
-        Program program{&prog_info, &shell, true, &camera};
+        Program program{&prog_info, &shell, false, &camera};
         program.init();
         program.run();
     }
