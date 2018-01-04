@@ -51,7 +51,7 @@ public:
 
     int get_fps()
     {
-        return static_cast<int>(1000.f / frame_time_avg_);
+        return static_cast<int>(round(1000.f / frame_time_avg_));
     }
 
 private:
