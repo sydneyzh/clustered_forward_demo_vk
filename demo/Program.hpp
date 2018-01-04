@@ -1856,7 +1856,7 @@ private:
             update_global_uniforms_(data);
             if (update_text_overlay) {
                 generate_text_(data, text_overlay_content_);
-                p_text_overlay_->update_text(text_overlay_content_, 0.05, 0.1, 12, 1.f / p_info_->height());
+                p_text_overlay_->update_text(text_overlay_content_, 0.05, 0.1, 14, p_info_->width(), p_info_->height());
             }
 
             auto &cmd_buf=data.offscreen_cmd_buf_blk.cmd_buffer;

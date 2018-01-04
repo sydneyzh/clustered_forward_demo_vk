@@ -224,7 +224,8 @@ public:
 
     void generate_text_data(const std::string &text,
                             float scr_u, float scr_v,
-                            float scr_font_scale,
+                            float scr_font_scale_x,
+                            float scr_font_scale_y,
                             std::vector<glm::vec4> &vec_content,
                             std::vector<uint32_t> &idx_content,
                             uint32_t idx_offset)
@@ -234,18 +235,19 @@ public:
         vec_content.reserve(4 * text.size());
         idx_content.reserve(6 * text.size());
 
-        const float scale=scr_font_scale / static_cast<float>(font_size);
+        const float scale_x=scr_font_scale_x / static_cast<float>(font_size);
+        const float scale_y=scr_font_scale_y / static_cast<float>(font_size);
 
         // in screen uv
         float cursor_pos[2]={scr_u, scr_v};
-        cursor_pos[1]+=base_height * scale;
+        cursor_pos[1]+=base_height * scale_y;
 
         uint32_t i=0;
         for (auto t : text) {
 
             if (int(t) == int('\n')) {
                 cursor_pos[0]=scr_u;
-                cursor_pos[1]+=line_height * scale;
+                cursor_pos[1]+=line_height * scale_y;
                 continue;;
             }
 
@@ -259,8 +261,8 @@ public:
 
             // a
             glm::vec4 vec_a={
-                cursor_pos[0] + ch.baseline_offset[0] * scale,
-                cursor_pos[1] + ch.baseline_offset[1] * scale,
+                cursor_pos[0] + ch.baseline_offset[0] * scale_x,
+                cursor_pos[1] + ch.baseline_offset[1] * scale_y,
                 ch.tex_coord[0],
                 ch.tex_coord[1]
             };
@@ -268,14 +270,14 @@ public:
             // b
             glm::vec4 vec_b={
                 vec_a[0],
-                vec_a[1] + ch.size[1] * scale,
+                vec_a[1] + ch.size[1] * scale_y,
                 vec_a[2],
                 vec_a[3] + ch.tex_coord_size[1]
             };
 
             // c
             glm::vec4 vec_c={
-                vec_a[0] + ch.size[0] * scale,
+                vec_a[0] + ch.size[0] * scale_x,
                 vec_b[1],
                 vec_a[2] + ch.tex_coord_size[0],
                 vec_b[3]
@@ -312,7 +314,7 @@ public:
 
             i++;
 
-            cursor_pos[0]+=ch.x_advance * scale;
+            cursor_pos[0]+=ch.x_advance * scale_x;
         }
     }
 };
@@ -362,7 +364,8 @@ public:
         const std::string &text,
         const float scr_u, const float scr_v,
         const uint32_t font_size,
-        const float height_scale) // in pixel
+        const uint32_t scr_width,
+        const uint32_t scr_height) // in pixel
     {
         assert(text.size() <= TEXT_OVERLAY_MAX_CHAR_COUNT);
 
@@ -370,10 +373,12 @@ public:
         std::vector<uint32_t> idx_content;
         uint32_t idx_offset=0;
         // scale pixel size to screen uv
-        float font_scale=static_cast<float>(font_size) * height_scale;
+        float font_scale_x=static_cast<float>(font_size) / static_cast<float>(scr_width);
+        float font_scale_y=static_cast<float>(font_size) / static_cast<float>(scr_height);
         p_font->generate_text_data(text,
                                    scr_u, scr_v,
-                                   font_scale,
+                                   font_scale_x,
+                                   font_scale_y,
                                    vec_content,
                                    idx_content,
                                    idx_offset);
