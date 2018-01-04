@@ -417,9 +417,9 @@ private:
     {
         QUERY_DEPTH_PASS=0,
         QUERY_CLUSTERING=1,
-        QUERY_COMPUTE_FLAGS=2,
-        QUERY_COMPUTE_OFFSETS=3,
-        QUERY_COMPUTE_LIST=4,
+        QUERY_CALC_LIGHT_GRIDS=2,
+        QUERY_CALC_GRID_OFFSETS=3,
+        QUERY_CALC_LIGHT_LIST=4,
         QUERY_ONSCREEN=5,
         QUERY_TRANSFER=6,
         QUERY_HSIZE=7
@@ -428,9 +428,9 @@ private:
     {
         uint32_t depth_pass[2];
         uint32_t clustering[2];
-        uint32_t compute_flags[2];
-        uint32_t compute_offsets[2];
-        uint32_t compute_list[2];
+        uint32_t calc_light_grids[2];
+        uint32_t calc_grid_offsets[2];
+        uint32_t calc_light_list[2];
         uint32_t onscreen[2];
         uint32_t transfer[2];
     };
@@ -1811,9 +1811,9 @@ private:
         std::stringstream ss;
         uint32_t depth=data.query_data.depth_pass[1] - data.query_data.depth_pass[0];
         uint32_t clustering=data.query_data.clustering[1] - data.query_data.clustering[0];
-        uint32_t compute_flags=data.query_data.compute_flags[1] - data.query_data.compute_flags[0];
-        uint32_t compute_offsets=data.query_data.compute_offsets[1] - data.query_data.compute_offsets[0];
-        uint32_t compute_list=data.query_data.compute_list[1] - data.query_data.compute_list[0];
+        uint32_t compute_flags=data.query_data.calc_light_grids[1] - data.query_data.calc_light_grids[0];
+        uint32_t compute_offsets=data.query_data.calc_grid_offsets[1] - data.query_data.calc_grid_offsets[0];
+        uint32_t compute_list=data.query_data.calc_light_list[1] - data.query_data.calc_light_list[0];
         uint32_t onscreen=data.query_data.onscreen[1] - data.query_data.onscreen[0];
         uint32_t transfer=data.query_data.transfer[1] - data.query_data.transfer[0];
         ss << p_phy_dev_->props.deviceName << "\n" <<
@@ -1825,9 +1825,9 @@ private:
             "------------------\n" <<
             "subpass depth: " << timestamp_to_str(depth) << "\n" <<
             "subpass clustering: " << timestamp_to_str(clustering) << "\n" <<
-            "compute grid_flags: " << timestamp_to_str(compute_flags) << "\n" <<
-            "compute light_offsets: " << timestamp_to_str(compute_offsets) << "\n" <<
-            "compute light_list: " << timestamp_to_str(compute_list) << "\n" <<
+            "calc light grids: " << timestamp_to_str(compute_flags) << "\n" <<
+            "calc grid offsets: " << timestamp_to_str(compute_offsets) << "\n" <<
+            "calc light list: " << timestamp_to_str(compute_list) << "\n" <<
             "subpass scene, particles, text (4xMSAA): " << timestamp_to_str(onscreen) << "\n" <<
             "transfer: " << timestamp_to_str(transfer) << "\n" <<
             "GPU total: " << timestamp_to_str(depth + clustering + compute_flags + compute_offsets + compute_list + onscreen + transfer);
@@ -1999,7 +1999,7 @@ private:
                 0, VK_WHOLE_SIZE
             };
 
-            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_FLAGS * 2);
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_CALC_LIGHT_GRIDS * 2);
 
             cmd_buf.pipelineBarrier(vk::PipelineStageFlagBits::eHost,
                                     vk::PipelineStageFlagBits::eComputeShader,
@@ -2020,7 +2020,7 @@ private:
                                        0, nullptr);
             cmd_buf.dispatch((p_info_->num_lights - 1) / 32 + 1, 1, 1);
 
-            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, data.query_pool, QUERY_COMPUTE_FLAGS * 2 + 1);
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, data.query_pool, QUERY_CALC_LIGHT_GRIDS * 2 + 1);
 
             barriers[0]=vk::BufferMemoryBarrier(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
                                                 vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
@@ -2040,7 +2040,7 @@ private:
             // reads grid_flags, grid_light_counts
             // writes grid_light_count_total, grid_light_offsets
 
-            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_OFFSETS * 2);
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_CALC_GRID_OFFSETS * 2);
 
             cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines_.calc_grid_offsets);
             pipeline_desc_sets_.calc_grid_offsets[0]=data.desc_set;
@@ -2051,7 +2051,7 @@ private:
                                        0, nullptr);
             cmd_buf.dispatch((p_info_->tile_count_x - 1) / 16 + 1, (p_info_->tile_count_y - 1) / 16 + 1, p_info_->TILE_COUNT_Z);
 
-            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, data.query_pool, QUERY_COMPUTE_OFFSETS * 2 + 1);
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, data.query_pool, QUERY_CALC_GRID_OFFSETS * 2 + 1);
 
             barriers[0].buffer=p_grid_light_count_total_->p_buf->buf;
             barriers[1].buffer=p_grid_light_count_offsets_->p_buf->buf;
@@ -2065,7 +2065,7 @@ private:
             // reads grid_flags, light_bounds, grid_light_counts, grid_light_offsets
             // writes grid_light_counts_compare, light_list
 
-            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_COMPUTE_LIST * 2);
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, data.query_pool, QUERY_CALC_LIGHT_LIST * 2);
 
             cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines_.calc_light_list);
             pipeline_desc_sets_.calc_light_list[0]=data.desc_set;
@@ -2076,7 +2076,7 @@ private:
                                        0, nullptr);
             cmd_buf.dispatch((p_info_->num_lights - 1) / 32 + 1, 1, 1);
 
-            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eFragmentShader, data.query_pool, QUERY_COMPUTE_LIST * 2 + 1);
+            cmd_buf.writeTimestamp(vk::PipelineStageFlagBits::eFragmentShader, data.query_pool, QUERY_CALC_LIGHT_LIST * 2 + 1);
 
             cmd_buf.end();
             compute_cmd_submit_info_.pCommandBuffers=&cmd_buf;
@@ -2090,7 +2090,7 @@ private:
                                                    static_cast<VkQueryPool>(data.query_pool),
                                                    4, 6,
                                                    sizeof(uint32_t) * 6,
-                                                   &data.query_data.compute_flags[0],
+                                                   &data.query_data.calc_light_grids[0],
                                                    sizeof(uint32_t),
                                                    static_cast<VkQueryResultFlagBits>(vk::QueryResultFlagBits::eWait)));
 
